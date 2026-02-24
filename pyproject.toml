@@ -20,6 +20,7 @@ classifiers = [
 ]
 dependencies = [
     "dashing>=0.1.0",
+    "loguru>=0.7.0",
     "psutil>=7.2.2",
 ]
 
@@ -31,6 +32,12 @@ mxtop = "mxtop.mxtop:main"
 
 [dependency-groups]
 dev = [
+    "build>=1.4.0",
     "hatchling>=1.28.0",
+    "loguru>=0.7.3",
     "setuptools>=82.0.0",
+    "twine>=6.2.0",
+]
+test = [
+    "pytest>=8.0",
 ]

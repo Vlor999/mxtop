@@ -2,7 +2,14 @@
  
 # mxtop
 
-![PyPI - Downloads](https://img.shields.io/pypi/dm/mxtop)
+[![PyPI - Version](https://img.shields.io/pypi/v/mxtop)](https://pypi.org/project/mxtop/)
+[![PyPI - Downloads](https://img.shields.io/pypi/dm/mxtop)](https://pypi.org/project/mxtop/)
+![PyPI - Python Version](https://img.shields.io/pypi/pyversions/mxtop)
+![License](https://img.shields.io/pypi/l/mxtop)
+
+![macOS](https://img.shields.io/badge/macOS-000000?style=flat&logo=apple&logoColor=white)
+[![GitHub Repo stars](https://img.shields.io/github/stars/Vlor999/mxtop?style=social)](https://github.com/Vlor999/mxtop)
+[![GitHub issues](https://img.shields.io/github/issues/Vlor999/mxtop)](https://github.com/Vlor999/mxtop/issues)
 
 Performance monitoring CLI tool for Apple Silicon
 
@@ -30,27 +37,32 @@ A Python-based `nvtop`-inspired command line tool for Apple Silicon (aka M1) Mac
 
 `mxtop` uses the built-in [`powermetrics`](https://www.unix.com/man-page/osx/1/powermetrics/) utility on macOS, which allows access to a variety of hardware performance counters. Note that it requires `sudo` to run due to `powermetrics` needing root access to run. `mxtop` is lightweight and has minimal performance impact.
 
-**`mxtop` only works on Apple Silicon Macs on macOS Monterey!**
+**`mxtop` works on Apple Silicon Macs (M1 through M4) on macOS Monterey and later.**
 
 ## Installation and Usage
 
 `mxtop` is a Python-based command line tool. You need `pip` to download and install `mxtop`. macOS already comes with Python, to install `pip`, you can follow an [online guide](https://phoenixnap.com/kb/install-pip-mac). After you install `mxtop` via `pip`, you can use it via the Terminal.
 
 ```shell
-# to enter password before start
-# this mode is recommended!
+# recommended — enter password before start
 sudo mxtop
 
-# it will prompt password on start
+# it will prompt for password on start
 mxtop
 
-# advanced options
+# press q or ESC to quit
+
+# all options
 mxtop [-h] [--interval INTERVAL] [--color COLOR] [--avg AVG]
-optional arguments:
-  -h, --help           show this help message and exit
-  --interval INTERVAL  Display interval and sampling interval for powermetrics (seconds)
-  --color COLOR        Choose display color (0~8)
-  --avg AVG            Interval for averaged values (seconds)
+            [--show_cores SHOW_CORES] [--max_count MAX_COUNT]
+
+options:
+  -h, --help            show this help message and exit
+  --interval INTERVAL   Display interval and sampling interval for powermetrics (seconds)
+  --color COLOR         Choose display color (0-8)
+  --avg AVG             Interval for averaged values (seconds)
+  --show_cores          Show individual core utilization
+  --max_count MAX_COUNT Max samples before restarting powermetrics (0 = unlimited)
 ```
 
 ## How it works
@@ -82,10 +94,6 @@ Some information is guesstimate and hardcoded as there doesn't seem to be a offi
 * ANE max power
 * Media engine max bandwidth
 
-## Why
+## License
 
-Because I didn't find something like this online. Also, just curious about stuff.
-
-## Disclaimers
-
-I did this randomly don't blame me if it fried your new MacBook or something.
+MIT — see [LICENSE](LICENSE) for details.

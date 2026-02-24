@@ -1,136 +1,35 @@
+"""mxtop — Performance monitoring CLI tool for Apple Silicon."""
+
+from __future__ import annotations
+
 import sys
-import tty
 import time
-import select
-import termios
 import argparse
 import threading
 from collections import deque
 
-from dashing import VSplit, HSplit, HGauge, HChart, VGauge
+from loguru import logger
 
 from .utils import (
     get_soc_info,
-    get_ram_metrics_dict,
     run_powermetrics_process,
     parse_powermetrics,
+    cleanup_tmp_files,
     clear_console,
 )
-
-
-# ---------------------------------------------------------------------------
-# Keyboard listener
-# ---------------------------------------------------------------------------
-
-def _keyboard_listener(stop_event: threading.Event) -> None:
-    """Run in a background thread; sets stop_event on ESC / q / Q."""
-    fd = sys.stdin.fileno()
-    old_settings = termios.tcgetattr(fd)
-    try:
-        tty.setraw(fd)
-        while not stop_event.is_set():
-            if select.select([sys.stdin], [], [], 0.1)[0]:
-                ch = sys.stdin.read(1)
-                if ch in ("\x1b", "q", "Q"):
-                    stop_event.set()
-    finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-
-
-# ---------------------------------------------------------------------------
-# UI construction
-# ---------------------------------------------------------------------------
-
-def _build_ui(args, soc_info: dict):
-    """Create and return all dashing widgets and the top-level UI split."""
-    color = args.color
-    e_core_count = soc_info["e_core_count"]
-    p_core_count = soc_info["p_core_count"]
-
-    # Processor gauges
-    cpu1_gauge = HGauge(title="E-CPU Usage", val=0, color=color)
-    cpu2_gauge = HGauge(title="P-CPU Usage", val=0, color=color)
-    gpu_gauge  = HGauge(title="GPU Usage",   val=0, color=color)
-    ane_gauge  = HGauge(title="ANE",         val=0, color=color)
-
-    e_core_gauges = [
-        VGauge(val=0, color=color, border_color=color)
-        for _ in range(e_core_count)
-    ]
-    p_core_gauges = [
-        VGauge(val=0, color=color, border_color=color)
-        for _ in range(min(p_core_count, 8))
-    ]
-    p_core_split = [HSplit(*p_core_gauges)]
-
-    p_core_gauges_ext = []
-    if p_core_count > 8:
-        p_core_gauges_ext = [
-            VGauge(val=0, color=color, border_color=color)
-            for _ in range(p_core_count - 8)
-        ]
-        p_core_split.append(HSplit(*p_core_gauges_ext))
-
-    if args.show_cores:
-        processor_gauges = [
-            cpu1_gauge, HSplit(*e_core_gauges),
-            cpu2_gauge, *p_core_split,
-            gpu_gauge, ane_gauge,
-        ]
-    else:
-        processor_gauges = [
-            HSplit(cpu1_gauge, cpu2_gauge),
-            HSplit(gpu_gauge, ane_gauge),
-        ]
-
-    processor_split = VSplit(
-        *processor_gauges,
-        title="Processor Utilization",
-        border_color=color,
-    )
-
-    # Memory
-    ram_gauge = HGauge(title="RAM Usage", val=0, color=color)
-    memory_gauges = VSplit(ram_gauge, border_color=color, title="Memory")
-
-    # Power charts
-    cpu_power_chart = HChart(title="CPU Power", color=color)
-    gpu_power_chart = HChart(title="GPU Power", color=color)
-
-    if args.show_cores:
-        power_charts = VSplit(
-            cpu_power_chart, gpu_power_chart,
-            title="Power Chart", border_color=color,
-        )
-    else:
-        power_charts = HSplit(
-            cpu_power_chart, gpu_power_chart,
-            title="Power Chart", border_color=color,
-        )
-
-    # Top-level layout
-    if args.show_cores:
-        ui = HSplit(processor_split, VSplit(memory_gauges, power_charts))
-    else:
-        ui = VSplit(processor_split, memory_gauges, power_charts)
-
-    widgets = {
-        "cpu1_gauge":        cpu1_gauge,
-        "cpu2_gauge":        cpu2_gauge,
-        "gpu_gauge":         gpu_gauge,
-        "ane_gauge":         ane_gauge,
-        "e_core_gauges":     e_core_gauges,
-        "p_core_gauges":     p_core_gauges,
-        "p_core_gauges_ext": p_core_gauges_ext,
-        "ram_gauge":         ram_gauge,
-        "cpu_power_chart":   cpu_power_chart,
-        "gpu_power_chart":   gpu_power_chart,
-        "power_charts":      power_charts,
-        "processor_split":   processor_split,
-    }
-    return ui, widgets
-
-
+from .keyboard import keyboard_listener
+from .ui import build_ui
+from .system_info import BackgroundMetricsCollector
+from .updater import (
+    _MAX_CHART_POINTS,
+    _cap_chart,
+    update_processor_widgets,
+    update_ram_widget,
+    update_power_charts,
+    update_wifi_widget,
+    update_power_widgets,
+    update_network_widget,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -161,7 +60,15 @@ def main():
         "--max_count", type=int, default=0,
         help="Max sample count before restarting powermetrics (0 = unlimited)",
     )
+    parser.add_argument(
+        "--log-level", type=str, default="WARNING",
+        help="Set loguru log level (DEBUG, INFO, WARNING, ERROR)",
+    )
     args = parser.parse_args()
+
+    # Configure loguru
+    logger.remove()  # remove default stderr handler
+    logger.add(sys.stderr, level=args.log_level.upper())
 
     print("\nmxtop - Performance monitoring CLI tool for Apple Silicon")
     print("Press  q  or  ESC  to quit.")
@@ -170,7 +77,9 @@ def main():
     print("\033[?25l")  # hide cursor
 
     soc_info = get_soc_info()
-    ui, w = _build_ui(args, soc_info)
+    logger.info("Detected SoC: {}", soc_info["name"])
+
+    ui, w = build_ui(args, soc_info)
 
     w["processor_split"].title = (
         f"{soc_info['name']} "
@@ -181,38 +90,42 @@ def main():
 
     cpu_max_power = soc_info["cpu_max_power"]
     gpu_max_power = soc_info["gpu_max_power"]
-    ane_max_power = 8.0
 
     print("\n[2/3] Starting powermetrics process\n")
     timecode = str(int(time.time()))
     powermetrics_process = run_powermetrics_process(timecode, interval=args.interval * 1000)
+    logger.info("powermetrics started (timecode={})", timecode)
 
     print("\n[3/3] Waiting for first reading...\n")
 
-    def get_reading(wait=0.1):
-        result = parse_powermetrics(timecode=timecode)
-        while not result:
-            time.sleep(wait)
-            result = parse_powermetrics(timecode=timecode)
-        return result
-
-    ready = get_reading()
+    # Block until the first valid reading arrives
+    ready = None
+    while ready is None:
+        time.sleep(0.1)
+        ready = parse_powermetrics(timecode=timecode)
     last_timestamp = ready[-1]
 
-    # Rolling averages
+    # Rolling averages state (mutated by update_power_charts)
     maxlen = max(1, int(args.avg / args.interval))
-    avg_package_power_list = deque(maxlen=maxlen)
-    avg_cpu_power_list     = deque(maxlen=maxlen)
-    avg_gpu_power_list     = deque(maxlen=maxlen)
-
-    cpu_peak_power     = 0.0
-    gpu_peak_power     = 0.0
-    package_peak_power = 0.0
+    avg_state: dict = {
+        "avg_package_power_list": deque(maxlen=maxlen),
+        "avg_cpu_power_list":     deque(maxlen=maxlen),
+        "avg_gpu_power_list":     deque(maxlen=maxlen),
+        "cpu_peak_power":         0.0,
+        "gpu_peak_power":         0.0,
+        "package_peak_power":     0.0,
+    }
 
     # Start keyboard listener thread
     stop_event = threading.Event()
-    kb_thread = threading.Thread(target=_keyboard_listener, args=(stop_event,), daemon=True)
+    kb_thread = threading.Thread(
+        target=keyboard_listener, args=(stop_event,), daemon=True,
+    )
     kb_thread.start()
+
+    # Start background metrics collector (WiFi, battery, network — slow calls)
+    bg_collector = BackgroundMetricsCollector(interval=5.0)
+    bg_collector.start(stop_event)
 
     clear_console()
     count = 0
@@ -226,8 +139,9 @@ def main():
                     powermetrics_process.terminate()
                     timecode = str(int(time.time()))
                     powermetrics_process = run_powermetrics_process(
-                        timecode, interval=args.interval * 1000
+                        timecode, interval=args.interval * 1000,
                     )
+                    logger.debug("Restarted powermetrics (timecode={})", timecode)
                 count += 1
 
             ready = parse_powermetrics(timecode=timecode)
@@ -239,84 +153,32 @@ def main():
                     continue
                 last_timestamp = timestamp
 
-                thermal_throttle = "no" if thermal_pressure == "Nominal" else "yes"
-
-                # CPU cluster gauges
-                w["cpu1_gauge"].title = (
-                    f"E-CPU Usage: {cpu_metrics['E-Cluster_active']}%"
-                    f" @ {cpu_metrics['E-Cluster_freq_Mhz']} MHz"
-                )
-                w["cpu1_gauge"].value = cpu_metrics["E-Cluster_active"]
-
-                w["cpu2_gauge"].title = (
-                    f"P-CPU Usage: {cpu_metrics['P-Cluster_active']}%"
-                    f" @ {cpu_metrics['P-Cluster_freq_Mhz']} MHz"
-                )
-                w["cpu2_gauge"].value = cpu_metrics["P-Cluster_active"]
-
-                # Per-core gauges (show_cores mode only)
-                if args.show_cores:
-                    for idx, i in enumerate(cpu_metrics["e_core"]):
-                        g = w["e_core_gauges"][idx % 4]
-                        g.title = f"Core-{i+1} {cpu_metrics[f'E-Cluster{i}_active']}%"
-                        g.value = cpu_metrics[f"E-Cluster{i}_active"]
-
-                    for idx, i in enumerate(cpu_metrics["p_core"]):
-                        gauges = w["p_core_gauges"] if idx < 8 else w["p_core_gauges_ext"]
-                        prefix = "Core-" if soc_info["p_core_count"] < 6 else "C-"
-                        gauges[idx % 8].title = f"{prefix}{i+1} {cpu_metrics[f'P-Cluster{i}_active']}%"
-                        gauges[idx % 8].value = cpu_metrics[f"P-Cluster{i}_active"]
-
-                # GPU gauge
-                w["gpu_gauge"].title = (
-                    f"GPU Usage: {gpu_metrics['active']}%"
-                    f" @ {gpu_metrics['freq_MHz']} MHz"
-                )
-                w["gpu_gauge"].value = gpu_metrics["active"]
-
-                # ANE gauge
-                ane_util = int(cpu_metrics["ane_W"] / args.interval / ane_max_power * 100)
-                ane_w = cpu_metrics["ane_W"] / args.interval
-                w["ane_gauge"].title = f"ANE Usage: {ane_util}% @ {ane_w:.1f} W"
-                w["ane_gauge"].value = ane_util
-
-                # RAM gauge
-                ram = get_ram_metrics_dict()
-                if ram["swap_total_GB"] < 0.1:
-                    swap_str = "swap inactive"
-                else:
-                    swap_str = f"swap: {ram['swap_used_GB']}/{ram['swap_total_GB']} GB"
-                w["ram_gauge"].title = f"RAM Usage: {ram['used_GB']}/{ram['total_GB']} GB — {swap_str}"
-                w["ram_gauge"].value = ram["free_percent"]
-
-                # Power charts
-                pkg_w = cpu_metrics["package_W"] / args.interval
-                package_peak_power = max(package_peak_power, pkg_w)
-                avg_package_power_list.append(pkg_w)
-                avg_pkg = sum(avg_package_power_list) / len(avg_package_power_list)
-                w["power_charts"].title = (
-                    f"CPU+GPU+ANE Power: {pkg_w:.2f} W"
-                    f" (avg: {avg_pkg:.2f} W  peak: {package_peak_power:.2f} W)"
-                    f"  throttle: {thermal_throttle}"
+                # --- Processor (CPU / GPU / ANE / cores) ---
+                update_processor_widgets(
+                    w, cpu_metrics, gpu_metrics, soc_info,
+                    show_cores=args.show_cores,
                 )
 
-                cpu_w = cpu_metrics["cpu_W"] / args.interval
-                cpu_peak_power = max(cpu_peak_power, cpu_w)
-                avg_cpu_power_list.append(cpu_w)
-                avg_cpu = sum(avg_cpu_power_list) / len(avg_cpu_power_list)
-                w["cpu_power_chart"].title = (
-                    f"CPU: {cpu_w:.2f} W (avg: {avg_cpu:.2f} W  peak: {cpu_peak_power:.2f} W)"
-                )
-                w["cpu_power_chart"].append(int(cpu_w / cpu_max_power * 100))
+                # --- RAM ---
+                update_ram_widget(w)
 
-                gpu_w = cpu_metrics["gpu_W"] / args.interval
-                gpu_peak_power = max(gpu_peak_power, gpu_w)
-                avg_gpu_power_list.append(gpu_w)
-                avg_gpu = sum(avg_gpu_power_list) / len(avg_gpu_power_list)
-                w["gpu_power_chart"].title = (
-                    f"GPU: {gpu_w:.2f} W (avg: {avg_gpu:.2f} W  peak: {gpu_peak_power:.2f} W)"
+                # --- Power charts ---
+                update_power_charts(
+                    w, cpu_metrics, thermal_pressure,
+                    interval=args.interval,
+                    cpu_max_power=cpu_max_power,
+                    gpu_max_power=gpu_max_power,
+                    avg_state=avg_state,
                 )
-                w["gpu_power_chart"].append(int(gpu_w / gpu_max_power * 100))
+
+                # --- WiFi ---
+                update_wifi_widget(w, bg_collector.wifi)
+
+                # --- Battery / charger ---
+                update_power_widgets(w, bg_collector.power)
+
+                # --- Network I/O ---
+                update_network_widget(w, bg_collector.network, interval=args.interval)
 
                 ui.display()
 
@@ -324,15 +186,16 @@ def main():
 
     finally:
         stop_event.set()
+        try:
+            powermetrics_process.terminate()
+            powermetrics_process.wait(timeout=3)
+        except Exception:
+            powermetrics_process.kill()
+        cleanup_tmp_files()
         print("\033[?25h")  # restore cursor
         print("\nStopped.")
-
-    return powermetrics_process
+        logger.info("mxtop stopped")
 
 
 if __name__ == "__main__":
-    proc = main()
-    try:
-        proc.terminate()
-    except Exception:
-        pass
+    main()

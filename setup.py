@@ -26,6 +26,7 @@ setup(
     keywords='mxtop',
     install_requires=[
         "dashing",
+        "loguru",
         "psutil",
     ],
     zip_safe=False
