@@ -45,17 +45,18 @@ def update_processor_widgets(
     *,
     show_cores: bool = False,
 ) -> None:
-    """Refresh E-CPU, P-CPU, GPU, ANE, and per-core gauges."""
-    # E-CPU cluster
+    """Refresh CPU clusters, GPU, ANE, and per-core gauges."""
+    e_label = cpu_metrics.get("e_cluster_label", "E-CPU")
+    p_label = cpu_metrics.get("p_cluster_label", "P-CPU")
+
     w["cpu1_gauge"].title = (
-        f"E-CPU Usage: {cpu_metrics['E-Cluster_active']}%"
+        f"{e_label} Usage: {cpu_metrics['E-Cluster_active']}%"
         f" @ {cpu_metrics['E-Cluster_freq_Mhz']} MHz"
     )
     w["cpu1_gauge"].value = cpu_metrics["E-Cluster_active"]
 
-    # P-CPU cluster
     w["cpu2_gauge"].title = (
-        f"P-CPU Usage: {cpu_metrics['P-Cluster_active']}%"
+        f"{p_label} Usage: {cpu_metrics['P-Cluster_active']}%"
         f" @ {cpu_metrics['P-Cluster_freq_Mhz']} MHz"
     )
     w["cpu2_gauge"].value = cpu_metrics["P-Cluster_active"]

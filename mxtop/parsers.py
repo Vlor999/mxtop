@@ -16,10 +16,30 @@ def parse_thermal_pressure(plist: dict[str, Any]) -> str:
 # CPU metrics
 # ---------------------------------------------------------------------------
 
+_CLUSTER_RANK: dict[str, int] = {"E": 0, "P": 1, "S": 2}
+
+
 def parse_cpu_metrics(plist: dict[str, Any]) -> dict[str, Any]:
-    """Extract CPU cluster and per-core metrics from a powermetrics plist."""
+    """Extract CPU cluster and per-core metrics from a powermetrics plist.
+
+    Apple cluster hierarchy (performance order): E < P < S.
+    The lowest-rank prefix present maps to the efficiency slot (cpu1 gauge),
+    the highest-rank prefix maps to the performance slot (cpu2 gauge).
+
+    Examples:
+      M1–M4 : E-Cluster → efficiency,  P-Cluster  → performance
+      M5    : P-Cluster → efficiency,  S-Cluster  → performance
+    """
     processor = plist["processor"]
     clusters = processor["clusters"]
+
+    # Determine efficiency / performance split by cluster rank
+    unique_prefixes = sorted(
+        set(c["name"][0] for c in clusters),
+        key=lambda l: _CLUSTER_RANK.get(l, 1),
+    )
+    e_prefix = unique_prefixes[0] if unique_prefixes else "E"
+    p_prefix = unique_prefixes[-1] if len(unique_prefixes) >= 2 else "P"
 
     metrics: dict[str, Any] = {}
     e_cores: list[int] = []
@@ -32,9 +52,7 @@ def parse_cpu_metrics(plist: dict[str, Any]) -> dict[str, Any]:
         metrics[f"{cname}_freq_Mhz"] = int(cluster["freq_hz"] / 1e6)
         metrics[f"{cname}_active"] = int((1 - cluster["idle_ratio"]) * 100)
 
-        # P-prefixed → performance cluster; everything else (E, S, …) → efficiency.
-        # Apple M4 Pro/Max uses "S-Cluster" for efficiency cores instead of "E-Cluster".
-        is_e = not cname.startswith("P")
+        is_e = cname[0] == e_prefix
         prefix = "E-Cluster" if is_e else "P-Cluster"
         if is_e:
             e_cluster_names.append(cname)
@@ -53,9 +71,13 @@ def parse_cpu_metrics(plist: dict[str, Any]) -> dict[str, Any]:
     metrics["p_core"] = p_cores
 
     # Synthesize canonical aggregates using the actual cluster names seen above.
-    # This handles any cluster naming scheme (E-Cluster, E0-Cluster, ECPU, …).
     _synthesize_from_names(metrics, "E-Cluster", e_cluster_names)
     _synthesize_from_names(metrics, "P-Cluster", p_cluster_names)
+
+    # Display labels reflect the actual cluster prefix letters:
+    #   M1–M4: "E-CPU" / "P-CPU"     M5: "P-CPU" / "S-CPU"
+    metrics["e_cluster_label"] = f"{e_prefix}-CPU"
+    metrics["p_cluster_label"] = f"{p_prefix}-CPU"
 
     # Power metrics (energy in mJ → convert to mW for per-interval use)
     metrics["ane_W"] = processor["ane_energy"] / 1000
