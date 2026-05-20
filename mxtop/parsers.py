@@ -9,7 +9,7 @@ from loguru import logger
 
 def parse_thermal_pressure(plist: dict[str, Any]) -> str:
     """Return the thermal pressure string (e.g. 'Nominal')."""
-    return plist["thermal_pressure"]
+    return plist.get("thermal_pressure", "Nominal")
 
 
 # ---------------------------------------------------------------------------
@@ -30,8 +30,10 @@ def parse_cpu_metrics(plist: dict[str, Any]) -> dict[str, Any]:
       M1–M4 : E-Cluster → efficiency,  P-Cluster  → performance
       M5    : P-Cluster → efficiency,  S-Cluster  → performance
     """
-    processor = plist["processor"]
-    clusters = processor["clusters"]
+    processor = plist.get("processor") or {}
+    clusters = processor.get("clusters") or []
+    if not clusters:
+        raise ValueError("plist has no CPU cluster data")
 
     # Determine efficiency / performance split by cluster rank
     unique_prefixes = sorted(
@@ -110,9 +112,11 @@ def _synthesize_from_names(
 
 def parse_gpu_metrics(plist: dict[str, Any]) -> dict[str, Any]:
     """Extract GPU utilization and frequency from a powermetrics plist."""
-    gpu = plist["gpu"]
+    gpu = plist.get("gpu")
+    if not gpu:
+        return {"freq_MHz": 0, "active": 0}
     return {
-        "freq_MHz": int(gpu["freq_hz"] / 1e6),
-        "active": int((1 - gpu["idle_ratio"]) * 100),
+        "freq_MHz": int(gpu.get("freq_hz", 0) / 1e6),
+        "active": int((1 - gpu.get("idle_ratio", 1)) * 100),
     }
 
