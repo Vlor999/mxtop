@@ -24,15 +24,24 @@ def parse_cpu_metrics(plist: dict[str, Any]) -> dict[str, Any]:
     metrics: dict[str, Any] = {}
     e_cores: list[int] = []
     p_cores: list[int] = []
+    e_cluster_names: list[str] = []
+    p_cluster_names: list[str] = []
 
     for cluster in clusters:
         cname = cluster["name"]
         metrics[f"{cname}_freq_Mhz"] = int(cluster["freq_hz"] / 1e6)
         metrics[f"{cname}_active"] = int((1 - cluster["idle_ratio"]) * 100)
 
-        # Determine canonical prefix (E-Cluster / P-Cluster)
-        prefix = "E-Cluster" if cname[0] == "E" else "P-Cluster"
-        core_list = e_cores if cname[0] == "E" else p_cores
+        # P-prefixed → performance cluster; everything else (E, S, …) → efficiency.
+        # Apple M4 Pro/Max uses "S-Cluster" for efficiency cores instead of "E-Cluster".
+        is_e = not cname.startswith("P")
+        prefix = "E-Cluster" if is_e else "P-Cluster"
+        if is_e:
+            e_cluster_names.append(cname)
+            core_list = e_cores
+        else:
+            p_cluster_names.append(cname)
+            core_list = p_cores
 
         for cpu in cluster["cpus"]:
             cpu_id = cpu["cpu"]
@@ -43,10 +52,10 @@ def parse_cpu_metrics(plist: dict[str, Any]) -> dict[str, Any]:
     metrics["e_core"] = e_cores
     metrics["p_core"] = p_cores
 
-    # Synthesize aggregate E-Cluster / P-Cluster values for multi-die chips
-    # (M1 Ultra has E0/E1, P0/P1/P2/P3 clusters)
-    _synthesize_cluster(metrics, "E-Cluster", "E")
-    _synthesize_cluster(metrics, "P-Cluster", "P")
+    # Synthesize canonical aggregates using the actual cluster names seen above.
+    # This handles any cluster naming scheme (E-Cluster, E0-Cluster, ECPU, …).
+    _synthesize_from_names(metrics, "E-Cluster", e_cluster_names)
+    _synthesize_from_names(metrics, "P-Cluster", p_cluster_names)
 
     # Power metrics (energy in mJ → convert to mW for per-interval use)
     metrics["ane_W"] = processor["ane_energy"] / 1000
@@ -57,29 +66,20 @@ def parse_cpu_metrics(plist: dict[str, Any]) -> dict[str, Any]:
     return metrics
 
 
-def _synthesize_cluster(
+def _synthesize_from_names(
     metrics: dict[str, Any],
     canonical: str,
-    letter: str,
+    names: list[str],
 ) -> None:
-    """If ``canonical`` (e.g. 'E-Cluster') is missing, average sub-clusters."""
+    """Ensure ``canonical`` aggregate exists; average sub-clusters if needed."""
     if f"{canonical}_active" in metrics:
         return
-
-    # Find all sub-cluster keys like P0-Cluster_active, P1-Cluster_active …
-    sub_active = [
-        v for k, v in metrics.items()
-        if k.startswith(f"{letter}") and k.endswith("-Cluster_active")
-    ]
-    sub_freq = [
-        v for k, v in metrics.items()
-        if k.startswith(f"{letter}") and k.endswith("-Cluster_freq_Mhz")
-    ]
-
-    if sub_active:
-        metrics[f"{canonical}_active"] = int(sum(sub_active) / len(sub_active))
-    if sub_freq:
-        metrics[f"{canonical}_freq_Mhz"] = max(sub_freq)
+    actives = [metrics[f"{n}_active"] for n in names if f"{n}_active" in metrics]
+    freqs = [metrics[f"{n}_freq_Mhz"] for n in names if f"{n}_freq_Mhz" in metrics]
+    if actives:
+        metrics[f"{canonical}_active"] = int(sum(actives) / len(actives))
+    if freqs:
+        metrics[f"{canonical}_freq_Mhz"] = max(freqs)
 
 
 # ---------------------------------------------------------------------------

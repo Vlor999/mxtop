@@ -6,6 +6,8 @@ thread via :class:`BackgroundMetricsCollector` so they never block the UI.
 
 from __future__ import annotations
 
+import json
+import os
 import subprocess
 import threading
 from typing import Any
@@ -18,11 +20,39 @@ from loguru import logger
 # WiFi metrics
 # ---------------------------------------------------------------------------
 
+def _drop_to_sudo_user():
+    """preexec_fn : drop root privileges to the original user (SUDO_UID/GID)."""
+    uid = os.environ.get("SUDO_UID")
+    gid = os.environ.get("SUDO_GID")
+    if uid and gid:
+        os.setgid(int(gid))
+        os.setuid(int(uid))
+
+
+def _get_wifi_interface() -> str:
+    """Detect the WiFi interface name (e.g. 'en0', 'en1') via networksetup."""
+    try:
+        proc = subprocess.run(
+            ["networksetup", "-listallhardwareports"],
+            preexec_fn=_drop_to_sudo_user,
+            capture_output=True, text=True, timeout=5,
+        )
+        lines = proc.stdout.splitlines()
+        for i, line in enumerate(lines):
+            if "Wi-Fi" in line or "AirPort" in line:
+                for j in range(i, min(i + 3, len(lines))):
+                    if "Device:" in lines[j]:
+                        return lines[j].split(":", 1)[1].strip()
+    except Exception:
+        pass
+    return "en0"
+
+
 def get_wifi_metrics() -> dict[str, Any]:
     """Return WiFi connection metrics.
 
-    Tries ``system_profiler SPAirPortDataType`` first (works on all macOS
-    versions), then falls back to the legacy ``airport -I`` utility.
+    Uses ``system_profiler SPAirPortDataType -json`` (language-independent),
+    then falls back to ``networksetup -getairportnetwork <iface>``.
 
     Keys returned:
     - ``ssid``        – Network name (str or ``None``)
@@ -41,79 +71,96 @@ def get_wifi_metrics() -> dict[str, Any]:
         "connected": False,
     }
 
-    # ---------- primary: system_profiler -----------------------------------
+    # ---------- primary: wdutil info (fonctionne en root sans drop) --------
     try:
         proc = subprocess.run(
-            ["system_profiler", "SPAirPortDataType", "-detailLevel", "basic"],
-            capture_output=True,
-            text=True,
-            timeout=10,
+            ["wdutil", "info"],
+            capture_output=True, text=True, timeout=5,
         )
         if proc.returncode == 0:
-            _parse_airport_profiler(proc.stdout, result)
+            _parse_wdutil(proc.stdout, result)
             if result["connected"]:
                 return result
     except Exception as exc:
-        logger.debug("system_profiler SPAirPortDataType failed: {}", exc)
+        logger.debug("wdutil info failed: {}", exc)
 
-    # ---------- fallback: legacy airport utility ---------------------------
+    # ---------- fallback: system_profiler JSON (drop root → user original) -
     try:
         proc = subprocess.run(
-            [
-                "/System/Library/PrivateFrameworks/Apple80211.framework"
-                "/Versions/Current/Resources/airport",
-                "-I",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=5,
+            ["system_profiler", "SPAirPortDataType", "-json"],
+            preexec_fn=_drop_to_sudo_user,
+            capture_output=True, text=True, timeout=10,
         )
-        if proc.returncode == 0:
-            _parse_airport_legacy(proc.stdout, result)
-    except FileNotFoundError:
-        logger.debug("airport utility not found — using system_profiler only")
+        if proc.returncode == 0 and proc.stdout.strip():
+            _parse_airport_json(json.loads(proc.stdout), result)
     except Exception as exc:
-        logger.debug("airport -I failed: {}", exc)
-
-    # ---------- SSID via networksetup (last resort) -----------------------
-    if result["ssid"] is None:
-        try:
-            proc = subprocess.run(
-                ["networksetup", "-getairportnetwork", "en0"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            if proc.returncode == 0 and "Current Wi-Fi Network:" in proc.stdout:
-                result["ssid"] = proc.stdout.split(":", 1)[1].strip()
-                result["connected"] = True
-        except Exception:
-            pass
+        logger.debug("system_profiler failed: {}", exc)
 
     return result
 
 
-def _parse_airport_profiler(output: str, result: dict[str, Any]) -> None:
-    """Parse ``system_profiler SPAirPortDataType`` output into *result*."""
-    in_current = False
-    for line in output.splitlines():
-        stripped = line.strip()
+def _parse_wdutil(output: str, result: dict[str, Any]) -> None:
+    """Parse ``wdutil info`` output — works as root.
 
-        # Look for the "Current Network Information:" section
-        if "Current Network Information" in stripped:
-            in_current = True
+    wdutil info contains multiple sections; RSSI/Noise/Channel are only
+    meaningful in the section that contains the connected SSID.
+    """
+    lines = output.splitlines()
+
+    # First pass: find the SSID line index
+    ssid_idx = None
+    for i, line in enumerate(lines):
+        if ":" not in line:
             continue
+        key, _, val = line.partition(":")
+        if key.strip() == "SSID" and val.strip():
+            result["ssid"] = val.strip()
+            result["connected"] = True
+            ssid_idx = i
+            break
 
-        if in_current:
-            # The SSID is the first indented key ending with ":"
-            if result["ssid"] is None and stripped.endswith(":") and ":" in stripped:
-                result["ssid"] = stripped.rstrip(":")
-                result["connected"] = True
+    if ssid_idx is None:
+        return
 
-            if stripped.startswith("Signal / Noise:"):
-                # e.g. "Signal / Noise: -52 dBm / -90 dBm"
-                parts = stripped.split(":", 1)[1].strip()
-                tokens = parts.replace("dBm", "").split("/")
+    # Second pass: read metrics from the same section (lines after SSID)
+    for line in lines[ssid_idx + 1: ssid_idx + 20]:
+        if ":" not in line:
+            continue
+        key, _, val = line.partition(":")
+        key = key.strip()
+        val = val.strip()
+        if key == "RSSI":
+            try:
+                result["rssi_dBm"] = int(val.split()[0])
+            except (ValueError, IndexError):
+                pass
+        elif key == "Noise":
+            try:
+                result["noise_dBm"] = int(val.split()[0])
+            except (ValueError, IndexError):
+                pass
+        elif key == "Channel":
+            result["channel"] = val
+        elif key in ("TX Rate", "TxRate"):
+            try:
+                result["tx_rate_Mbps"] = float(val.split()[0])
+            except (ValueError, IndexError):
+                pass
+
+
+def _parse_airport_json(data: dict[str, Any], result: dict[str, Any]) -> None:
+    """Parse ``system_profiler SPAirPortDataType -json`` output into *result*."""
+    for section in data.get("SPAirPortDataType", []):
+        for iface in section.get("spairport_airport_interfaces", []):
+            net = iface.get("spairport_current_network_information")
+            if not net:
+                continue
+            result["ssid"] = net.get("_name")
+            result["connected"] = True
+            # "-68 dBm / -95 dBm"
+            sig_noise = net.get("spairport_signal_noise", "")
+            if sig_noise:
+                tokens = sig_noise.replace("dBm", "").split("/")
                 try:
                     result["rssi_dBm"] = int(tokens[0].strip())
                 except (ValueError, IndexError):
@@ -122,38 +169,16 @@ def _parse_airport_profiler(output: str, result: dict[str, Any]) -> None:
                     result["noise_dBm"] = int(tokens[1].strip())
                 except (ValueError, IndexError):
                     pass
-
-            elif stripped.startswith("Transmit Rate:"):
+            rate = net.get("spairport_network_rate")
+            if rate is not None:
                 try:
-                    result["tx_rate_Mbps"] = float(
-                        stripped.split(":", 1)[1].strip()
-                    )
-                except ValueError:
+                    result["tx_rate_Mbps"] = float(rate)
+                except (ValueError, TypeError):
                     pass
-
-            elif stripped.startswith("Channel:"):
-                result["channel"] = stripped.split(":", 1)[1].strip()
-
-            # Stop when the section ends (next top-level heading)
-            if not line.startswith(" ") and not line.startswith("\t") and stripped and in_current and result["ssid"]:
-                break
-
-
-def _parse_airport_legacy(output: str, result: dict[str, Any]) -> None:
-    """Parse legacy ``airport -I`` output into *result*."""
-    for line in output.splitlines():
-        line = line.strip()
-        if line.startswith("SSID:"):
-            result["ssid"] = line.split(":", 1)[1].strip()
-            result["connected"] = True
-        elif line.startswith("agrCtlRSSI:"):
-            result["rssi_dBm"] = int(line.split(":", 1)[1].strip())
-        elif line.startswith("agrCtlNoise:"):
-            result["noise_dBm"] = int(line.split(":", 1)[1].strip())
-        elif line.startswith("lastTxRate:"):
-            result["tx_rate_Mbps"] = float(line.split(":", 1)[1].strip())
-        elif line.startswith("channel:"):
-            result["channel"] = line.split(":", 1)[1].strip()
+            channel = net.get("spairport_network_channel")
+            if channel:
+                result["channel"] = str(channel)
+            return  # premier réseau connecté suffit
 
 
 # ---------------------------------------------------------------------------
