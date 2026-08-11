@@ -57,6 +57,7 @@ mxtop
 # all options
 mxtop [-h] [--interval INTERVAL] [--color COLOR] [--avg AVG]
             [--show_cores SHOW_CORES] [--max_count MAX_COUNT] [--top N]
+            [--export PATH]
 
 options:
   -h, --help            show this help message and exit
@@ -67,6 +68,11 @@ options:
   --max_count MAX_COUNT Max samples before restarting powermetrics (0 = unlimited)
   --top N               Number of top CPU processes to display (0 hides the
                         panel, default 5)
+  --export PATH         Append every sample to PATH. `.csv` writes a header row
+                        plus one row per sample; `.json`, `.jsonl` and `.ndjson`
+                        write JSON Lines (one object per line). Rows are flushed
+                        as they are written, so the file is readable while mxtop
+                        runs and stays complete if the run is interrupted.
 ```
 
 ## How it works
