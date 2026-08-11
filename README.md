@@ -30,6 +30,8 @@ A Python-based `nvtop`-inspired command line tool for Apple Silicon (aka M1) Mac
 * Memory info:
   * RAM and swap, size and usage
   * (Apple removed memory bandwidth from `powermetrics`)
+* Top processes:
+  * Heaviest processes by CPU, with their resident memory
 * Power info:
   * CPU power, GPU power (Apple removed package power from `powermetrics`)
   * Chart for CPU/GPU power
@@ -54,7 +56,7 @@ mxtop
 
 # all options
 mxtop [-h] [--interval INTERVAL] [--color COLOR] [--avg AVG]
-            [--show_cores SHOW_CORES] [--max_count MAX_COUNT]
+            [--show_cores SHOW_CORES] [--max_count MAX_COUNT] [--top N]
 
 options:
   -h, --help            show this help message and exit
@@ -63,6 +65,8 @@ options:
   --avg AVG             Interval for averaged values (seconds)
   --show_cores          Show individual core utilization
   --max_count MAX_COUNT Max samples before restarting powermetrics (0 = unlimited)
+  --top N               Number of top CPU processes to display (0 hides the
+                        panel, default 5)
 ```
 
 ## How it works
