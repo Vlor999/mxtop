@@ -110,6 +110,36 @@ class TestParsePowermetrics:
         result = parse_powermetrics(path=str(f), timecode="")
         assert result is None
 
+    def test_read_only_file_is_parsed_and_left_intact(self, tmp_path):
+        """Without sudo the file belongs to root: read it, do not truncate."""
+        f = tmp_path / "pm"
+        blob = _make_plist_bytes()
+        f.write_bytes(blob + b"\x00" + blob)
+        before = f.read_bytes()
+        f.chmod(0o444)
+        try:
+            result = parse_powermetrics(path=str(f), timecode="")
+            assert result is not None
+            assert result[2] == "Nominal"
+            assert f.read_bytes() == before  # untouched
+        finally:
+            f.chmod(0o644)
+
+    def test_writable_file_is_shrunk_to_the_last_blob(self, tmp_path):
+        f = tmp_path / "pm"
+        blob = _make_plist_bytes()
+        f.write_bytes(blob + b"\x00" + blob)
+        assert parse_powermetrics(path=str(f), timecode="") is not None
+        assert f.read_bytes() == blob
+
+    def test_trailing_partial_blob_is_skipped(self, tmp_path):
+        f = tmp_path / "pm"
+        blob = _make_plist_bytes()
+        f.write_bytes(blob + b"\x00" + blob[:40])
+        result = parse_powermetrics(path=str(f), timecode="")
+        assert result is not None
+        assert result[2] == "Nominal"
+
     def test_valid_single_blob(self, tmp_path):
         f = tmp_path / "pm"
         f.write_bytes(_make_plist_bytes())

@@ -61,15 +61,26 @@ def parse_powermetrics(
     or *None* if no valid data is available yet.
 
     Only the tail of the file is read to avoid unbounded memory growth
-    (powermetrics keeps appending NUL-separated plists).  After a
-    successful parse the file is truncated to keep only the last valid
-    blob, preventing disk growth as well.
+    (powermetrics keeps appending NUL-separated plists).  When the file is
+    writable it is then truncated to keep only the last valid blob,
+    preventing disk growth as well.
+
+    ``powermetrics`` always runs as root, so without ``sudo mxtop`` the file
+    belongs to root and cannot be opened for writing.  That is not fatal: the
+    file is then read read-only and left untouched.
     """
     filepath = path + timecode
+    writable = True
     try:
         fd = os.open(filepath, os.O_RDWR)
     except FileNotFoundError:
         return None
+    except PermissionError:
+        try:
+            fd = os.open(filepath, os.O_RDONLY)
+        except OSError:
+            return None
+        writable = False
 
     try:
         file_size = os.fstat(fd).st_size
@@ -88,23 +99,32 @@ def parse_powermetrics(
                 continue
             try:
                 plist = plistlib.loads(chunk)
-                # Truncate file: keep only this last good blob
-                os.ftruncate(fd, 0)
-                os.lseek(fd, 0, os.SEEK_SET)
-                os.write(fd, chunk)
-                return (
-                    parse_cpu_metrics(plist),
-                    parse_gpu_metrics(plist),
-                    parse_thermal_pressure(plist),
-                    None,
-                    plist["timestamp"],
-                )
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001 — partial or stale blob
                 continue
+
+            if writable:
+                _keep_only_last_blob(fd, chunk)
+            return (
+                parse_cpu_metrics(plist),
+                parse_gpu_metrics(plist),
+                parse_thermal_pressure(plist),
+                None,
+                plist["timestamp"],
+            )
 
         return None
     finally:
         os.close(fd)
+
+
+def _keep_only_last_blob(fd: int, chunk: bytes) -> None:
+    """Shrink the powermetrics file to the last blob we successfully parsed."""
+    try:
+        os.ftruncate(fd, 0)
+        os.lseek(fd, 0, os.SEEK_SET)
+        os.write(fd, chunk)
+    except OSError as exc:
+        logger.debug("could not truncate powermetrics file: {}", exc)
 
 
 # ---------------------------------------------------------------------------
