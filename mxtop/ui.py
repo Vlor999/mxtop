@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from dashing import VSplit, HSplit, HGauge, HChart, VGauge
+from dashing import VSplit, HSplit, HGauge, HChart, VGauge, Text
 
 from loguru import logger
 
@@ -116,20 +116,29 @@ def build_ui(args: Any, soc_info: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
     # ---- Network throughput wrapped panel ---------------------------------
     net_panel = VSplit(net_gauge, border_color=color, title="Network I/O")
 
+    # ---- Top processes panel ---------------------------------------------
+    top_text = None
+    panels = [memory_gauges, system_info_panel, net_panel]
+    if getattr(args, "top", 0):
+        top_text = Text("sampling…", color=color)
+        panels.append(
+            VSplit(top_text, border_color=color, title=f"Top {args.top} (CPU)")
+        )
+
     # ---- Top-level layout ------------------------------------------------
     if args.show_cores:
         ui = HSplit(
             processor_split,
             VSplit(
                 memory_gauges,
-                HSplit(system_info_panel, net_panel),
+                HSplit(*panels[1:]),
                 power_charts,
             ),
         )
     else:
         ui = VSplit(
             processor_split,
-            HSplit(memory_gauges, system_info_panel, net_panel),
+            HSplit(*panels),
             power_charts,
         )
 
@@ -150,5 +159,6 @@ def build_ui(args: Any, soc_info: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
         "battery_gauge":     battery_gauge,
         "charger_gauge":     charger_gauge,
         "net_gauge":         net_gauge,
+        "top_text":          top_text,
     }
     return ui, widgets

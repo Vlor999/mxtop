@@ -278,6 +278,37 @@ def get_network_throughput() -> dict[str, int]:
 
 
 # ---------------------------------------------------------------------------
+# Top processes
+# ---------------------------------------------------------------------------
+
+def get_top_processes(count: int = 5) -> list[dict[str, Any]]:
+    """Return the *count* heaviest processes by CPU, then by memory.
+
+    Each entry has ``pid``, ``name``, ``cpu_percent`` and ``rss``.
+
+    ``cpu_percent`` is measured between successive calls, so the very first
+    call after startup reports 0.0 for every process — psutil keeps the
+    per-process state behind ``process_iter``, and the ranking becomes
+    meaningful from the second call on.
+    """
+    rows: list[dict[str, Any]] = []
+    for proc in psutil.process_iter(["pid", "name", "cpu_percent", "memory_info"]):
+        try:
+            info = proc.info
+            mem = info["memory_info"]
+            rows.append({
+                "pid": info["pid"],
+                "name": info["name"] or "?",
+                "cpu_percent": info["cpu_percent"] or 0.0,
+                "rss": mem.rss if mem else 0,
+            })
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    rows.sort(key=lambda r: (r["cpu_percent"], r["rss"]), reverse=True)
+    return rows[:count]
+
+
+# ---------------------------------------------------------------------------
 # Background metrics collector
 # ---------------------------------------------------------------------------
 
@@ -295,8 +326,9 @@ class BackgroundMetricsCollector:
         net   = collector.network
     """
 
-    def __init__(self, interval: float = 5.0) -> None:
+    def __init__(self, interval: float = 5.0, top_count: int = 5) -> None:
         self.interval = interval
+        self.top_count = top_count
 
         # Latest snapshots (read by main thread, written by bg thread)
         self._wifi: dict[str, Any] = {
@@ -309,6 +341,9 @@ class BackgroundMetricsCollector:
             "wattage": None, "adapter_name": None, "cable_connected": False,
         }
         self._network: dict[str, int] = {"bytes_sent": 0, "bytes_recv": 0}
+        self._top: list[dict[str, Any]] = []
+        if top_count:
+            get_top_processes(top_count)  # prime psutil's per-process CPU state
 
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
@@ -330,6 +365,11 @@ class BackgroundMetricsCollector:
         with self._lock:
             return dict(self._network)
 
+    @property
+    def top(self) -> list[dict[str, Any]]:
+        with self._lock:
+            return list(self._top)
+
     # -- lifecycle --
 
     def start(self, stop_event: threading.Event) -> None:
@@ -347,10 +387,12 @@ class BackgroundMetricsCollector:
                 wifi = get_wifi_metrics()
                 power = get_power_metrics()
                 network = get_network_throughput()
+                top = get_top_processes(self.top_count) if self.top_count else []
                 with self._lock:
                     self._wifi = wifi
                     self._power = power
                     self._network = network
+                    self._top = top
                 logger.debug("Background metrics refreshed")
             except Exception:
                 logger.opt(exception=True).warning("Background metrics collection failed")
