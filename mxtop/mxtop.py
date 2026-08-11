@@ -11,6 +11,7 @@ from collections import deque
 from loguru import logger
 
 from .utils import (
+    get_ram_metrics_dict,
     get_soc_info,
     run_powermetrics_process,
     parse_powermetrics,
@@ -20,6 +21,7 @@ from .utils import (
 from .keyboard import keyboard_listener
 from .ui import build_ui
 from .system_info import BackgroundMetricsCollector
+from .export import Exporter, sample_row
 from .updater import (
     _MAX_CHART_POINTS,
     _cap_chart,
@@ -66,6 +68,10 @@ def main():
         help="Number of top CPU processes to display (0 = hide the panel)",
     )
     parser.add_argument(
+        "--export", type=str, default=None, metavar="PATH",
+        help="Append every sample to PATH (.csv, or .json/.jsonl for JSON Lines)",
+    )
+    parser.add_argument(
         "--log-level", type=str, default="WARNING",
         help="Set loguru log level (DEBUG, INFO, WARNING, ERROR)",
     )
@@ -74,6 +80,8 @@ def main():
     # Configure loguru
     logger.remove()  # remove default stderr handler
     logger.add(sys.stderr, level=args.log_level.upper())
+
+    exporter = Exporter(args.export) if args.export else None
 
     print("\nmxtop - Performance monitoring CLI tool for Apple Silicon")
     print("Press  q  or  ESC  to quit.")
@@ -188,6 +196,12 @@ def main():
                 # --- Top processes ---
                 update_top_widget(w, bg_collector.top)
 
+                if exporter is not None:
+                    exporter.write(sample_row(
+                        timestamp, cpu_metrics, gpu_metrics,
+                        get_ram_metrics_dict(), thermal_pressure,
+                    ))
+
                 ui.display()
 
             time.sleep(args.interval)
@@ -199,6 +213,8 @@ def main():
             powermetrics_process.wait(timeout=3)
         except Exception:
             powermetrics_process.kill()
+        if exporter is not None:
+            exporter.close()
         cleanup_tmp_files()
         print("\033[?25h")  # restore cursor
         print("\nStopped.")
