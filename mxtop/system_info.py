@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import subprocess
 import threading
+import time
 from typing import Any
 
 import psutil
@@ -309,6 +310,25 @@ def get_top_processes(count: int = 5) -> list[dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
+# Disk throughput (bytes read/written since boot)
+# ---------------------------------------------------------------------------
+
+def get_disk_throughput() -> dict[str, float]:
+    """Return cumulative disk I/O counters plus the sampling timestamp.
+
+    Keys: ``read_bytes``, ``write_bytes``, ``t`` (``time.monotonic()``).
+    ``read_bytes``/``write_bytes`` are 0 when the platform exposes no
+    counters (psutil returns ``None`` on some sandboxed setups).
+    """
+    counters = psutil.disk_io_counters()
+    return {
+        "read_bytes": float(counters.read_bytes) if counters else 0.0,
+        "write_bytes": float(counters.write_bytes) if counters else 0.0,
+        "t": time.monotonic(),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Background metrics collector
 # ---------------------------------------------------------------------------
 
@@ -344,6 +364,7 @@ class BackgroundMetricsCollector:
         self._top: list[dict[str, Any]] = []
         if top_count:
             get_top_processes(top_count)  # prime psutil's per-process CPU state
+        self._disk: dict[str, float] = get_disk_throughput()
 
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
@@ -370,6 +391,11 @@ class BackgroundMetricsCollector:
         with self._lock:
             return list(self._top)
 
+    @property
+    def disk(self) -> dict[str, float]:
+        with self._lock:
+            return dict(self._disk)
+
     # -- lifecycle --
 
     def start(self, stop_event: threading.Event) -> None:
@@ -388,11 +414,13 @@ class BackgroundMetricsCollector:
                 power = get_power_metrics()
                 network = get_network_throughput()
                 top = get_top_processes(self.top_count) if self.top_count else []
+                disk = get_disk_throughput()
                 with self._lock:
                     self._wifi = wifi
                     self._power = power
                     self._network = network
                     self._top = top
+                    self._disk = disk
                 logger.debug("Background metrics refreshed")
             except Exception:
                 logger.opt(exception=True).warning("Background metrics collection failed")

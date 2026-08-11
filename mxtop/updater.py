@@ -280,3 +280,43 @@ def update_top_widget(w: dict[str, Any], top: list[dict[str, Any]]) -> None:
         f"{row['name'][:18]}"
         for row in top
     )
+
+
+# ---------------------------------------------------------------------------
+# Disk throughput widget update
+# ---------------------------------------------------------------------------
+
+_prev_disk: dict[str, float] | None = None
+
+_DISK_GAUGE_FULL_SCALE = 1024 ** 3  # 1 GB/s reads as a full gauge
+
+
+def update_disk_widget(w: dict[str, Any], disk: dict[str, float]) -> None:
+    """Refresh the disk I/O gauge with per-second throughput.
+
+    *disk* is a pre-fetched dict from the background collector; rates are
+    derived from its own ``t`` timestamp, so they stay correct whatever the
+    collector's refresh interval is.
+    """
+    global _prev_disk
+
+    prev, _prev_disk = _prev_disk, disk
+    if prev is None:
+        w["disk_gauge"].title = "Disk: measuring…"
+        w["disk_gauge"].value = 0
+        return
+
+    elapsed = disk["t"] - prev["t"]
+    if elapsed <= 0:  # same sample seen twice — keep the previous reading
+        return
+
+    read_rate = (disk["read_bytes"] - prev["read_bytes"]) / elapsed
+    write_rate = (disk["write_bytes"] - prev["write_bytes"]) / elapsed
+    w["disk_gauge"].title = (
+        f"Disk: R {_format_bytes(int(read_rate))}/s"
+        f"  W {_format_bytes(int(write_rate))}/s"
+    )
+    w["disk_gauge"].value = max(
+        0, min(100, int((read_rate + write_rate) / _DISK_GAUGE_FULL_SCALE * 100))
+    )
+    _prev_disk = disk
