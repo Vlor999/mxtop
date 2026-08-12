@@ -1,5 +1,8 @@
 [build-system]
-requires = ["hatchling"]
+# hatchling >= 1.28 emits Metadata-Version 2.5, which neither twine nor PyPI
+# accepts yet — `uv build` produces an artifact that fails upload. Lift the pin
+# once PyPI supports 2.5.
+requires = ["hatchling<1.28"]
 build-backend = "hatchling.build"
 
 [project]
