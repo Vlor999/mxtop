@@ -9,30 +9,59 @@ from loguru import logger
 
 def parse_thermal_pressure(plist: dict[str, Any]) -> str:
     """Return the thermal pressure string (e.g. 'Nominal')."""
-    return plist["thermal_pressure"]
+    return plist.get("thermal_pressure", "Nominal")
 
 
 # ---------------------------------------------------------------------------
 # CPU metrics
 # ---------------------------------------------------------------------------
 
+_CLUSTER_RANK: dict[str, int] = {"E": 0, "P": 1, "S": 2}
+
+
 def parse_cpu_metrics(plist: dict[str, Any]) -> dict[str, Any]:
-    """Extract CPU cluster and per-core metrics from a powermetrics plist."""
-    processor = plist["processor"]
-    clusters = processor["clusters"]
+    """Extract CPU cluster and per-core metrics from a powermetrics plist.
+
+    Apple cluster hierarchy (performance order): E < P < S.
+    The lowest-rank prefix present maps to the efficiency slot (cpu1 gauge),
+    the highest-rank prefix maps to the performance slot (cpu2 gauge).
+
+    Examples:
+      M1–M4 : E-Cluster → efficiency,  P-Cluster  → performance
+      M5    : P-Cluster → efficiency,  S-Cluster  → performance
+    """
+    processor = plist.get("processor") or {}
+    clusters = processor.get("clusters") or []
+    if not clusters:
+        raise ValueError("plist has no CPU cluster data")
+
+    # Determine efficiency / performance split by cluster rank
+    unique_prefixes = sorted(
+        set(c["name"][0] for c in clusters),
+        key=lambda l: _CLUSTER_RANK.get(l, 1),
+    )
+    e_prefix = unique_prefixes[0] if unique_prefixes else "E"
+    p_prefix = unique_prefixes[-1] if len(unique_prefixes) >= 2 else "P"
 
     metrics: dict[str, Any] = {}
     e_cores: list[int] = []
     p_cores: list[int] = []
+    e_cluster_names: list[str] = []
+    p_cluster_names: list[str] = []
 
     for cluster in clusters:
         cname = cluster["name"]
         metrics[f"{cname}_freq_Mhz"] = int(cluster["freq_hz"] / 1e6)
         metrics[f"{cname}_active"] = int((1 - cluster["idle_ratio"]) * 100)
 
-        # Determine canonical prefix (E-Cluster / P-Cluster)
-        prefix = "E-Cluster" if cname[0] == "E" else "P-Cluster"
-        core_list = e_cores if cname[0] == "E" else p_cores
+        is_e = cname[0] == e_prefix
+        prefix = "E-Cluster" if is_e else "P-Cluster"
+        if is_e:
+            e_cluster_names.append(cname)
+            core_list = e_cores
+        else:
+            p_cluster_names.append(cname)
+            core_list = p_cores
 
         for cpu in cluster["cpus"]:
             cpu_id = cpu["cpu"]
@@ -43,10 +72,14 @@ def parse_cpu_metrics(plist: dict[str, Any]) -> dict[str, Any]:
     metrics["e_core"] = e_cores
     metrics["p_core"] = p_cores
 
-    # Synthesize aggregate E-Cluster / P-Cluster values for multi-die chips
-    # (M1 Ultra has E0/E1, P0/P1/P2/P3 clusters)
-    _synthesize_cluster(metrics, "E-Cluster", "E")
-    _synthesize_cluster(metrics, "P-Cluster", "P")
+    # Synthesize canonical aggregates using the actual cluster names seen above.
+    _synthesize_from_names(metrics, "E-Cluster", e_cluster_names)
+    _synthesize_from_names(metrics, "P-Cluster", p_cluster_names)
+
+    # Display labels reflect the actual cluster prefix letters:
+    #   M1–M4: "E-CPU" / "P-CPU"     M5: "P-CPU" / "S-CPU"
+    metrics["e_cluster_label"] = f"{e_prefix}-CPU"
+    metrics["p_cluster_label"] = f"{p_prefix}-CPU"
 
     # Power metrics (energy in mJ → convert to mW for per-interval use)
     metrics["ane_W"] = processor["ane_energy"] / 1000
@@ -57,29 +90,20 @@ def parse_cpu_metrics(plist: dict[str, Any]) -> dict[str, Any]:
     return metrics
 
 
-def _synthesize_cluster(
+def _synthesize_from_names(
     metrics: dict[str, Any],
     canonical: str,
-    letter: str,
+    names: list[str],
 ) -> None:
-    """If ``canonical`` (e.g. 'E-Cluster') is missing, average sub-clusters."""
+    """Ensure ``canonical`` aggregate exists; average sub-clusters if needed."""
     if f"{canonical}_active" in metrics:
         return
-
-    # Find all sub-cluster keys like P0-Cluster_active, P1-Cluster_active …
-    sub_active = [
-        v for k, v in metrics.items()
-        if k.startswith(f"{letter}") and k.endswith("-Cluster_active")
-    ]
-    sub_freq = [
-        v for k, v in metrics.items()
-        if k.startswith(f"{letter}") and k.endswith("-Cluster_freq_Mhz")
-    ]
-
-    if sub_active:
-        metrics[f"{canonical}_active"] = int(sum(sub_active) / len(sub_active))
-    if sub_freq:
-        metrics[f"{canonical}_freq_Mhz"] = max(sub_freq)
+    actives = [metrics[f"{n}_active"] for n in names if f"{n}_active" in metrics]
+    freqs = [metrics[f"{n}_freq_Mhz"] for n in names if f"{n}_freq_Mhz" in metrics]
+    if actives:
+        metrics[f"{canonical}_active"] = int(sum(actives) / len(actives))
+    if freqs:
+        metrics[f"{canonical}_freq_Mhz"] = max(freqs)
 
 
 # ---------------------------------------------------------------------------
@@ -88,9 +112,11 @@ def _synthesize_cluster(
 
 def parse_gpu_metrics(plist: dict[str, Any]) -> dict[str, Any]:
     """Extract GPU utilization and frequency from a powermetrics plist."""
-    gpu = plist["gpu"]
+    gpu = plist.get("gpu")
+    if not gpu:
+        return {"freq_MHz": 0, "active": 0}
     return {
-        "freq_MHz": int(gpu["freq_hz"] / 1e6),
-        "active": int((1 - gpu["idle_ratio"]) * 100),
+        "freq_MHz": int(gpu.get("freq_hz", 0) / 1e6),
+        "active": int((1 - gpu.get("idle_ratio", 1)) * 100),
     }
 

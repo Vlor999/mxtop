@@ -142,6 +142,10 @@ def main():
                 if count >= args.max_count:
                     count = 0
                     powermetrics_process.terminate()
+                    try:
+                        powermetrics_process.wait(timeout=2)
+                    except Exception:
+                        powermetrics_process.kill()
                     timecode = str(int(time.time()))
                     powermetrics_process = run_powermetrics_process(
                         timecode, interval=args.interval * 1000,

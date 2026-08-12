@@ -18,30 +18,35 @@ from .parsers import parse_cpu_metrics, parse_gpu_metrics, parse_thermal_pressur
 # ---------------------------------------------------------------------------
 
 _SOC_SPECS: dict[str, dict[str, int]] = {
-    # name -> {cpu_max_power, gpu_max_power, cpu_max_bw, gpu_max_bw}
+    # name -> {cpu_max_power, gpu_max_power, cpu_max_bw, gpu_max_bw, ane_max_power}
     # M1 family
-    "Apple M1":       {"cpu": 20,  "gpu": 20,  "cpu_bw": 70,  "gpu_bw": 70},
-    "Apple M1 Pro":   {"cpu": 30,  "gpu": 30,  "cpu_bw": 200, "gpu_bw": 200},
-    "Apple M1 Max":   {"cpu": 30,  "gpu": 60,  "cpu_bw": 250, "gpu_bw": 400},
-    "Apple M1 Ultra": {"cpu": 60,  "gpu": 120, "cpu_bw": 500, "gpu_bw": 800},
+    "Apple M1":       {"cpu": 20,  "gpu": 20,  "cpu_bw": 70,  "gpu_bw": 70,  "ane": 8},
+    "Apple M1 Pro":   {"cpu": 30,  "gpu": 30,  "cpu_bw": 200, "gpu_bw": 200, "ane": 8},
+    "Apple M1 Max":   {"cpu": 30,  "gpu": 60,  "cpu_bw": 250, "gpu_bw": 400, "ane": 8},
+    "Apple M1 Ultra": {"cpu": 60,  "gpu": 120, "cpu_bw": 500, "gpu_bw": 800, "ane": 16},
     # M2 family
-    "Apple M2":       {"cpu": 25,  "gpu": 15,  "cpu_bw": 100, "gpu_bw": 100},
-    "Apple M2 Pro":   {"cpu": 30,  "gpu": 35,  "cpu_bw": 200, "gpu_bw": 200},
-    "Apple M2 Max":   {"cpu": 30,  "gpu": 60,  "cpu_bw": 250, "gpu_bw": 400},
-    "Apple M2 Ultra": {"cpu": 60,  "gpu": 120, "cpu_bw": 500, "gpu_bw": 800},
+    "Apple M2":       {"cpu": 25,  "gpu": 15,  "cpu_bw": 100, "gpu_bw": 100, "ane": 8},
+    "Apple M2 Pro":   {"cpu": 30,  "gpu": 35,  "cpu_bw": 200, "gpu_bw": 200, "ane": 8},
+    "Apple M2 Max":   {"cpu": 30,  "gpu": 60,  "cpu_bw": 250, "gpu_bw": 400, "ane": 8},
+    "Apple M2 Ultra": {"cpu": 60,  "gpu": 120, "cpu_bw": 500, "gpu_bw": 800, "ane": 16},
     # M3 family
-    "Apple M3":       {"cpu": 25,  "gpu": 20,  "cpu_bw": 100, "gpu_bw": 100},
-    "Apple M3 Pro":   {"cpu": 30,  "gpu": 35,  "cpu_bw": 150, "gpu_bw": 150},
-    "Apple M3 Max":   {"cpu": 40,  "gpu": 60,  "cpu_bw": 300, "gpu_bw": 400},
-    "Apple M3 Ultra": {"cpu": 80,  "gpu": 120, "cpu_bw": 600, "gpu_bw": 800},
+    "Apple M3":       {"cpu": 25,  "gpu": 20,  "cpu_bw": 100, "gpu_bw": 100, "ane": 8},
+    "Apple M3 Pro":   {"cpu": 30,  "gpu": 35,  "cpu_bw": 150, "gpu_bw": 150, "ane": 8},
+    "Apple M3 Max":   {"cpu": 40,  "gpu": 60,  "cpu_bw": 300, "gpu_bw": 400, "ane": 8},
+    "Apple M3 Ultra": {"cpu": 80,  "gpu": 120, "cpu_bw": 600, "gpu_bw": 800, "ane": 16},
     # M4 family
-    "Apple M4":       {"cpu": 25,  "gpu": 20,  "cpu_bw": 120, "gpu_bw": 120},
-    "Apple M4 Pro":   {"cpu": 30,  "gpu": 35,  "cpu_bw": 200, "gpu_bw": 200},
-    "Apple M4 Max":   {"cpu": 40,  "gpu": 60,  "cpu_bw": 350, "gpu_bw": 500},
-    "Apple M4 Ultra": {"cpu": 80,  "gpu": 120, "cpu_bw": 700, "gpu_bw": 900},
+    "Apple M4":       {"cpu": 25,  "gpu": 20,  "cpu_bw": 120, "gpu_bw": 120, "ane": 8},
+    "Apple M4 Pro":   {"cpu": 30,  "gpu": 35,  "cpu_bw": 200, "gpu_bw": 200, "ane": 8},
+    "Apple M4 Max":   {"cpu": 40,  "gpu": 60,  "cpu_bw": 350, "gpu_bw": 500, "ane": 8},
+    "Apple M4 Ultra": {"cpu": 80,  "gpu": 120, "cpu_bw": 700, "gpu_bw": 900, "ane": 16},
+    # M5 family
+    "Apple M5":       {"cpu": 25,  "gpu": 20,  "cpu_bw": 150, "gpu_bw": 150, "ane": 8},
+    "Apple M5 Pro":   {"cpu": 35,  "gpu": 40,  "cpu_bw": 250, "gpu_bw": 250, "ane": 8},
+    "Apple M5 Max":   {"cpu": 45,  "gpu": 70,  "cpu_bw": 400, "gpu_bw": 600, "ane": 8},
+    "Apple M5 Ultra": {"cpu": 90,  "gpu": 140, "cpu_bw": 800, "gpu_bw": 1200,"ane": 16},
 }
 
-_SOC_DEFAULT = {"cpu": 20, "gpu": 20, "cpu_bw": 70, "gpu_bw": 70}
+_SOC_DEFAULT = {"cpu": 20, "gpu": 20, "cpu_bw": 70, "gpu_bw": 70, "ane": 8}
 
 
 # ---------------------------------------------------------------------------
@@ -279,6 +284,7 @@ def get_soc_info() -> dict[str, Any]:
         "gpu_core_count": gpu_cores,
         "cpu_max_power": specs["cpu"],
         "gpu_max_power": specs["gpu"],
+        "ane_max_power": specs["ane"],
         "cpu_max_bw": specs["cpu_bw"],
         "gpu_max_bw": specs["gpu_bw"],
     }

@@ -45,35 +45,47 @@ def update_processor_widgets(
     *,
     show_cores: bool = False,
 ) -> None:
-    """Refresh E-CPU, P-CPU, GPU, ANE, and per-core gauges."""
-    # E-CPU cluster
+    """Refresh CPU clusters, GPU, ANE, and per-core gauges."""
+    e_label = cpu_metrics.get("e_cluster_label", "E-CPU")
+    p_label = cpu_metrics.get("p_cluster_label", "P-CPU")
+
     w["cpu1_gauge"].title = (
-        f"E-CPU Usage: {cpu_metrics['E-Cluster_active']}%"
+        f"{e_label} Usage: {cpu_metrics['E-Cluster_active']}%"
         f" @ {cpu_metrics['E-Cluster_freq_Mhz']} MHz"
     )
     w["cpu1_gauge"].value = cpu_metrics["E-Cluster_active"]
 
-    # P-CPU cluster
     w["cpu2_gauge"].title = (
-        f"P-CPU Usage: {cpu_metrics['P-Cluster_active']}%"
+        f"{p_label} Usage: {cpu_metrics['P-Cluster_active']}%"
         f" @ {cpu_metrics['P-Cluster_freq_Mhz']} MHz"
     )
     w["cpu2_gauge"].value = cpu_metrics["P-Cluster_active"]
 
     # Per-core gauges
     if show_cores:
+        e_gauges = w.get("e_core_gauges", [])
         for idx, i in enumerate(cpu_metrics["e_core"]):
-            g = w["e_core_gauges"][idx % 4]
-            g.title = f"Core-{i + 1} {cpu_metrics[f'E-Cluster{i}_active']}%"
-            g.value = cpu_metrics[f"E-Cluster{i}_active"]
-
-        for idx, i in enumerate(cpu_metrics["p_core"]):
-            gauges = w["p_core_gauges"] if idx < 8 else w["p_core_gauges_ext"]
-            prefix = "Core-" if soc_info["p_core_count"] < 6 else "C-"
-            gauges[idx % 8].title = (
-                f"{prefix}{i + 1} {cpu_metrics[f'P-Cluster{i}_active']}%"
+            if idx >= len(e_gauges):
+                break
+            e_gauges[idx].title = (
+                f"Core-{i + 1} {cpu_metrics.get(f'E-Cluster{i}_active', 0)}%"
             )
-            gauges[idx % 8].value = cpu_metrics[f"P-Cluster{i}_active"]
+            e_gauges[idx].value = cpu_metrics.get(f"E-Cluster{i}_active", 0)
+
+        p_gauges = w.get("p_core_gauges", [])
+        p_gauges_ext = w.get("p_core_gauges_ext", [])
+        prefix = "Core-" if soc_info["p_core_count"] < 6 else "C-"
+        for idx, i in enumerate(cpu_metrics["p_core"]):
+            if idx < len(p_gauges):
+                slot, gauges = idx, p_gauges
+            elif idx - len(p_gauges) < len(p_gauges_ext):
+                slot, gauges = idx - len(p_gauges), p_gauges_ext
+            else:
+                break
+            gauges[slot].title = (
+                f"{prefix}{i + 1} {cpu_metrics.get(f'P-Cluster{i}_active', 0)}%"
+            )
+            gauges[slot].value = cpu_metrics.get(f"P-Cluster{i}_active", 0)
 
     # GPU
     w["gpu_gauge"].title = (
@@ -82,10 +94,10 @@ def update_processor_widgets(
     )
     w["gpu_gauge"].value = gpu_metrics["active"]
 
-    # ANE
-    ane_max_power = 8.0
-    ane_util = int(cpu_metrics["ane_W"] / ane_max_power * 100)
+    # ANE — max power varies by chip; cap at 100% to avoid gauge overflow
+    ane_max_power = soc_info.get("ane_max_power", 8.0)
     ane_w = cpu_metrics["ane_W"]
+    ane_util = min(100, int(ane_w / ane_max_power * 100))
     w["ane_gauge"].title = f"ANE Usage: {ane_util}% @ {ane_w:.1f} W"
     w["ane_gauge"].value = ane_util
 
@@ -127,7 +139,7 @@ def update_power_charts(
     ``avg_package_power_list``, ``avg_cpu_power_list``, ``avg_gpu_power_list``,
     ``cpu_peak_power``, ``gpu_peak_power``, ``package_peak_power``.
     """
-    thermal_throttle = "no" if thermal_pressure == "Nominal" else "yes"
+    thermal_throttle = "no" if thermal_pressure.strip().lower() == "nominal" else "yes"
 
     pkg_w = cpu_metrics["package_W"] / interval
     avg_state["package_peak_power"] = max(avg_state["package_peak_power"], pkg_w)
