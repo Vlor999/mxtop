@@ -258,3 +258,25 @@ def update_network_widget(
         w["net_gauge"].value = 0
 
     _prev_net = current
+
+
+# ---------------------------------------------------------------------------
+# Top processes widget update
+# ---------------------------------------------------------------------------
+
+def update_top_widget(w: dict[str, Any], top: list[dict[str, Any]]) -> None:
+    """Render the top-processes table.
+
+    *top* is a pre-fetched list from the background collector.
+    """
+    widget = w.get("top_text")
+    if widget is None:
+        return
+    if not top:
+        widget.text = "sampling…"
+        return
+    widget.text = "\n".join(
+        f"{row['cpu_percent']:5.1f}% {_format_bytes(row['rss']):>9}  "
+        f"{row['name'][:18]}"
+        for row in top
+    )

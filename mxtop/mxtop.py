@@ -29,6 +29,7 @@ from .updater import (
     update_wifi_widget,
     update_power_widgets,
     update_network_widget,
+    update_top_widget,
 )
 
 
@@ -59,6 +60,10 @@ def main():
     parser.add_argument(
         "--max_count", type=int, default=0,
         help="Max sample count before restarting powermetrics (0 = unlimited)",
+    )
+    parser.add_argument(
+        "--top", type=int, default=5,
+        help="Number of top CPU processes to display (0 = hide the panel)",
     )
     parser.add_argument(
         "--log-level", type=str, default="WARNING",
@@ -124,7 +129,7 @@ def main():
     kb_thread.start()
 
     # Start background metrics collector (WiFi, battery, network — slow calls)
-    bg_collector = BackgroundMetricsCollector(interval=5.0)
+    bg_collector = BackgroundMetricsCollector(interval=5.0, top_count=args.top)
     bg_collector.start(stop_event)
 
     clear_console()
@@ -179,6 +184,9 @@ def main():
 
                 # --- Network I/O ---
                 update_network_widget(w, bg_collector.network, interval=args.interval)
+
+                # --- Top processes ---
+                update_top_widget(w, bg_collector.top)
 
                 ui.display()
 
