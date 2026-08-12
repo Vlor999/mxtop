@@ -8,6 +8,7 @@ from dashing import HChart
 
 from loguru import logger
 
+from .constants import DISK_GAUGE_FULL_SCALE
 from .utils import get_ram_metrics_dict
 
 
@@ -288,8 +289,6 @@ def update_top_widget(w: dict[str, Any], top: list[dict[str, Any]]) -> None:
 
 _prev_disk: dict[str, float] | None = None
 
-_DISK_GAUGE_FULL_SCALE = 1024 ** 3  # 1 GB/s reads as a full gauge
-
 
 def update_disk_widget(w: dict[str, Any], disk: dict[str, float]) -> None:
     """Refresh the disk I/O gauge with per-second throughput.
@@ -317,6 +316,6 @@ def update_disk_widget(w: dict[str, Any], disk: dict[str, float]) -> None:
         f"  W {_format_bytes(int(write_rate))}/s"
     )
     w["disk_gauge"].value = max(
-        0, min(100, int((read_rate + write_rate) / _DISK_GAUGE_FULL_SCALE * 100))
+        0, min(100, int((read_rate + write_rate) / DISK_GAUGE_FULL_SCALE * 100))
     )
     _prev_disk = disk
