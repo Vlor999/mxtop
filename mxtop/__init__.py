@@ -5,10 +5,10 @@ from __future__ import annotations
 import curses
 import os
 
-_FALLBACK_TERM = "xterm-256color"
+from .constants import FALLBACK_TERM
 
 
-def ensure_known_term(fallback: str = _FALLBACK_TERM) -> str | None:
+def ensure_known_term(fallback: str = FALLBACK_TERM) -> str | None:
     """Fall back to a known TERM when the current one has no terminfo entry.
 
     Terminals such as Ghostty ship a terminfo name (``xterm-ghostty``) that is
