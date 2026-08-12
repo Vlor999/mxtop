@@ -25,6 +25,18 @@ def _cap_chart(chart: HChart, maxlen: int = _MAX_CHART_POINTS) -> None:
         chart.datapoints = chart.datapoints[-maxlen:]
 
 
+def _printable(text: Any) -> str:
+    """Drop control characters before rendering externally-supplied text.
+
+    Process names, WiFi SSIDs and USB-C adapter names are all chosen by
+    someone other than the user running mxtop, and land straight in a terminal
+    that mxtop often drives as root.  ``str.isprintable()`` is False for ESC,
+    newlines and tabs, so this strips escape sequences and table-breaking
+    whitespace in one pass.
+    """
+    return "".join(c for c in str(text) if c.isprintable())
+
+
 def _format_bytes(b: int) -> str:
     """Human-readable byte size (e.g. 1.2 GB, 340 MB)."""
     for unit in ("B", "KB", "MB", "GB", "TB"):
@@ -184,7 +196,7 @@ def update_wifi_widget(w: dict[str, Any], wifi: dict[str, Any]) -> None:
         signal_pct = max(0, min(100, int((rssi + 90) / 60 * 100)))
         rate_str = f" {wifi['tx_rate_Mbps']:.0f} Mbps" if wifi["tx_rate_Mbps"] else ""
         w["wifi_gauge"].title = (
-            f"WiFi: {wifi['ssid']}  {rssi} dBm ({signal_pct}%){rate_str}"
+            f"WiFi: {_printable(wifi['ssid'])}  {rssi} dBm ({signal_pct}%){rate_str}"
         )
         w["wifi_gauge"].value = signal_pct
     else:
@@ -216,7 +228,7 @@ def update_power_widgets(w: dict[str, Any], pwr: dict[str, Any]) -> None:
     # Charger gauge
     if pwr["cable_connected"]:
         watt_str = f"{pwr['wattage']}W" if pwr["wattage"] else "?"
-        name_str = pwr["adapter_name"] or "Unknown adapter"
+        name_str = _printable(pwr["adapter_name"] or "Unknown adapter")
         w["charger_gauge"].title = f"Charger: {name_str} ({watt_str}) — cable connected"
         w["charger_gauge"].value = 100
     else:
@@ -278,7 +290,7 @@ def update_top_widget(w: dict[str, Any], top: list[dict[str, Any]]) -> None:
         return
     widget.text = "\n".join(
         f"{row['cpu_percent']:5.1f}% {_format_bytes(row['rss']):>9}  "
-        f"{row['name'][:18]}"
+        f"{_printable(row['name'])[:18]}"
         for row in top
     )
 
