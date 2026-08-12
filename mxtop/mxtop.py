@@ -112,9 +112,17 @@ def main():
 
     print("\n[3/3] Waiting for first reading...\n")
 
-    # Block until the first valid reading arrives
+    # Block until the first valid reading arrives. powermetrics writes to
+    # stderr=DEVNULL, so a failed start is otherwise indistinguishable from a
+    # slow one and this loop would spin forever.
     ready = None
     while ready is None:
+        if powermetrics_process.poll() is not None:
+            print("\033[?25h")  # restore cursor
+            raise SystemExit(
+                f"powermetrics exited with status {powermetrics_process.returncode} "
+                f"before producing a reading — try `sudo mxtop`."
+            )
         time.sleep(0.1)
         ready = parse_powermetrics(timecode=timecode)
     last_timestamp = ready[-1]

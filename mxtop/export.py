@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 from pathlib import Path
 from typing import Any, TextIO
 
@@ -39,6 +40,22 @@ def sample_row(
     }
 
 
+def _give_back_to_sudo_user(fh: TextIO) -> None:
+    """Hand a file created under ``sudo mxtop`` back to the invoking user.
+
+    Otherwise every export is root-owned and the user cannot edit or delete it
+    without sudo. Uses ``fchown`` on the open handle, so a symlinked target
+    cannot redirect the ownership change.
+    """
+    uid, gid = os.environ.get("SUDO_UID"), os.environ.get("SUDO_GID")
+    if not (uid and gid):
+        return
+    try:
+        os.fchown(fh.fileno(), int(uid), int(gid))
+    except OSError as exc:
+        logger.debug("could not chown the export file: {}", exc)
+
+
 class Exporter:
     """Append one record per sample to *path*.
 
@@ -60,6 +77,7 @@ class Exporter:
             )
         self.format = fmt
         self._fh: TextIO = self.path.open("w", newline="", encoding="utf-8")
+        _give_back_to_sudo_user(self._fh)
         self._writer: csv.DictWriter | None = None
         logger.info("Exporting samples to {} ({})", self.path, self.format)
 

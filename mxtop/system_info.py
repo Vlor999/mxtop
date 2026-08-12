@@ -45,7 +45,7 @@ def get_wifi_metrics() -> dict[str, Any]:
     # ---------- primary: system_profiler -----------------------------------
     try:
         proc = subprocess.run(
-            ["system_profiler", "SPAirPortDataType", "-detailLevel", "basic"],
+            ["/usr/sbin/system_profiler", "SPAirPortDataType", "-detailLevel", "basic"],
             capture_output=True,
             text=True,
             timeout=10,
@@ -80,7 +80,7 @@ def get_wifi_metrics() -> dict[str, Any]:
     if result["ssid"] is None:
         try:
             proc = subprocess.run(
-                ["networksetup", "-getairportnetwork", "en0"],
+                ["/usr/sbin/networksetup", "-getairportnetwork", "en0"],
                 capture_output=True,
                 text=True,
                 timeout=5,
@@ -197,7 +197,7 @@ def get_power_metrics() -> dict[str, Any]:
     # --- pmset -g batt (works without sudo) ---
     try:
         proc = subprocess.run(
-            ["pmset", "-g", "batt"],
+            ["/usr/bin/pmset", "-g", "batt"],
             capture_output=True,
             text=True,
             timeout=5,
@@ -239,7 +239,7 @@ def get_power_metrics() -> dict[str, Any]:
     # --- system_profiler for charger details ---
     try:
         proc = subprocess.run(
-            ["system_profiler", "SPPowerDataType", "-detailLevel", "basic"],
+            ["/usr/sbin/system_profiler", "SPPowerDataType", "-detailLevel", "basic"],
             capture_output=True,
             text=True,
             timeout=10,

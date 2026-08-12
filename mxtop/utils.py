@@ -5,7 +5,9 @@ from __future__ import annotations
 import glob
 import os
 import plistlib
+import stat
 import subprocess
+import tempfile
 from typing import Any
 
 import psutil
@@ -45,6 +47,18 @@ _SOC_DEFAULT = {"cpu": 20, "gpu": 20, "cpu_bw": 70, "gpu_bw": 70}
 
 
 # ---------------------------------------------------------------------------
+# Temp file location
+# ---------------------------------------------------------------------------
+
+# powermetrics runs as root and writes here, and we read the file back and
+# truncate it — also as root under `sudo mxtop`.  A predictable name in the
+# world-writable /tmp let any local user plant a symlink there and have root
+# overwrite the target.  mkdtemp gives an unguessable 0700 directory instead.
+_TMP_DIR = tempfile.mkdtemp(prefix="mxtop-")
+_TMP_PREFIX = os.path.join(_TMP_DIR, "powermetrics")
+
+
+# ---------------------------------------------------------------------------
 # Powermetrics file parsing
 # ---------------------------------------------------------------------------
 
@@ -52,7 +66,7 @@ _READ_TAIL_BYTES = 64 * 1024  # only read the last 64 KiB of the file
 
 
 def parse_powermetrics(
-    path: str = "/tmp/mxtop_powermetrics",
+    path: str = _TMP_PREFIX,
     timecode: str = "0",
 ) -> tuple[dict, dict, str, None, Any] | None:
     """Parse the plist written by powermetrics.
@@ -68,22 +82,33 @@ def parse_powermetrics(
     ``powermetrics`` always runs as root, so without ``sudo mxtop`` the file
     belongs to root and cannot be opened for writing.  That is not fatal: the
     file is then read read-only and left untouched.
+
+    The file is opened with ``O_NOFOLLOW`` and must be a regular file: we
+    truncate and rewrite it as root, so following a symlink here would let a
+    local user redirect that write anywhere on the system.
     """
     filepath = path + timecode
     writable = True
     try:
-        fd = os.open(filepath, os.O_RDWR)
+        fd = os.open(filepath, os.O_RDWR | os.O_NOFOLLOW)
     except FileNotFoundError:
         return None
     except PermissionError:
         try:
-            fd = os.open(filepath, os.O_RDONLY)
+            fd = os.open(filepath, os.O_RDONLY | os.O_NOFOLLOW)
         except OSError:
             return None
         writable = False
+    except OSError as exc:  # ELOOP — the path is a symlink
+        logger.warning("refusing to read {}: {}", filepath, exc)
+        return None
 
     try:
-        file_size = os.fstat(fd).st_size
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            logger.warning("refusing to read {}: not a regular file", filepath)
+            return None
+        file_size = st.st_size
         if file_size == 0:
             return None
 
@@ -132,7 +157,9 @@ def _keep_only_last_blob(fd: int, chunk: bytes) -> None:
 # ---------------------------------------------------------------------------
 
 def clear_console() -> None:
-    os.system("clear")
+    # ANSI erase-screen + cursor-home. Not `os.system("clear")`: that spawns a
+    # shell and resolves `clear` through $PATH, which mxtop runs as root.
+    print("\033[2J\033[H", end="", flush=True)
 
 
 def _bytes_to_gb(value: int | float) -> float:
@@ -143,16 +170,17 @@ def _bytes_to_gb(value: int | float) -> float:
 # Subprocess management
 # ---------------------------------------------------------------------------
 
-_TMP_PREFIX = "/tmp/mxtop_powermetrics"
-
-
 def cleanup_tmp_files() -> None:
-    """Remove leftover powermetrics temp files."""
+    """Remove leftover powermetrics temp files and the directory holding them."""
     for f in glob.glob(f"{_TMP_PREFIX}*"):
         try:
             os.remove(f)
         except OSError:
             pass
+    try:
+        os.rmdir(_TMP_DIR)
+    except OSError:
+        pass
 
 
 def run_powermetrics_process(
@@ -162,9 +190,12 @@ def run_powermetrics_process(
 ) -> subprocess.Popen:
     """Spawn ``powermetrics`` as a background process writing to a temp file."""
     cleanup_tmp_files()
+    os.makedirs(_TMP_DIR, mode=0o700, exist_ok=True)
+    # Absolute paths: this runs as root, and macOS sudo does not set
+    # secure_path, so $PATH is still the invoking user's.
     cmd = [
-        "sudo", "nice", f"-n{nice}",
-        "powermetrics",
+        "/usr/bin/sudo", "/usr/bin/nice", f"-n{nice}",
+        "/usr/bin/powermetrics",
         "--samplers", "cpu_power,gpu_power,thermal",
         "-o", f"{_TMP_PREFIX}{timecode}",
         "-f", "plist",
@@ -217,7 +248,7 @@ def _run_sysctl(key: str) -> str | None:
     """Fetch a single sysctl value, returning None on failure."""
     try:
         result = subprocess.run(
-            ["sysctl", "-n", key],
+            ["/usr/sbin/sysctl", "-n", key],
             capture_output=True, text=True, timeout=5,
         )
         return result.stdout.strip() or None
@@ -241,7 +272,7 @@ def _get_core_counts() -> tuple[int, int]:
 def _get_gpu_cores() -> int | str:
     try:
         result = subprocess.run(
-            ["system_profiler", "-detailLevel", "basic", "SPDisplaysDataType"],
+            ["/usr/sbin/system_profiler", "-detailLevel", "basic", "SPDisplaysDataType"],
             capture_output=True, text=True, timeout=10,
         )
         for line in result.stdout.splitlines():

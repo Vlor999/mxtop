@@ -40,7 +40,7 @@ class TestGetWifiMetrics:
     def test_connected_via_legacy_airport(self, mock_run):
         """Falls back to legacy airport -I when system_profiler has no data."""
         def side_effect(cmd, **kw):
-            if "system_profiler" in cmd:
+            if any("system_profiler" in c for c in cmd):
                 return MagicMock(returncode=0, stdout="Wi-Fi:\n")
             if "airport" in cmd[0]:
                 return MagicMock(
@@ -90,7 +90,7 @@ class TestGetPowerMetrics:
     @patch("mxtop.system_info.subprocess.run")
     def test_ac_power(self, mock_run):
         def side_effect(cmd, **kw):
-            if "pmset" in cmd:
+            if any("pmset" in c for c in cmd):
                 return MagicMock(
                     returncode=0,
                     stdout=(
@@ -119,7 +119,7 @@ class TestGetPowerMetrics:
     @patch("mxtop.system_info.subprocess.run")
     def test_battery_power(self, mock_run):
         def side_effect(cmd, **kw):
-            if "pmset" in cmd:
+            if any("pmset" in c for c in cmd):
                 return MagicMock(
                     returncode=0,
                     stdout=(
