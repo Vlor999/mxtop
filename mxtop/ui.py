@@ -113,8 +113,11 @@ def build_ui(args: Any, soc_info: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
     # ---- Network throughput panel ----------------------------------------
     net_gauge = HGauge(title="Network", val=0, color=color)
 
-    # ---- Network throughput wrapped panel ---------------------------------
-    net_panel = VSplit(net_gauge, border_color=color, title="Network I/O")
+    # ---- Disk throughput panel -------------------------------------------
+    disk_gauge = HGauge(title="Disk", val=0, color=color)
+
+    # ---- I/O wrapped panel ------------------------------------------------
+    net_panel = VSplit(net_gauge, disk_gauge, border_color=color, title="I/O")
 
     # ---- Top processes panel ---------------------------------------------
     top_text = None
@@ -159,6 +162,7 @@ def build_ui(args: Any, soc_info: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
         "battery_gauge":     battery_gauge,
         "charger_gauge":     charger_gauge,
         "net_gauge":         net_gauge,
+        "disk_gauge":        disk_gauge,
         "top_text":          top_text,
     }
     return ui, widgets

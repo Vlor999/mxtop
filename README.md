@@ -30,6 +30,9 @@ A Python-based `nvtop`-inspired command line tool for Apple Silicon (aka M1) Mac
 * Memory info:
   * RAM and swap, size and usage
   * (Apple removed memory bandwidth from `powermetrics`)
+* I/O info:
+  * Network throughput (up/down)
+  * Disk throughput (read/write)
 * Top processes:
   * Heaviest processes by CPU, with their resident memory
 * Power info:

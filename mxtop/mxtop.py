@@ -30,6 +30,7 @@ from .updater import (
     update_power_widgets,
     update_network_widget,
     update_top_widget,
+    update_disk_widget,
 )
 
 
@@ -184,6 +185,9 @@ def main():
 
                 # --- Network I/O ---
                 update_network_widget(w, bg_collector.network, interval=args.interval)
+
+                # --- Disk I/O ---
+                update_disk_widget(w, bg_collector.disk)
 
                 # --- Top processes ---
                 update_top_widget(w, bg_collector.top)
