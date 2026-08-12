@@ -1,4 +1,4 @@
-# mxtop v0.1.1 — Modular Architecture, New Panels & Performance
+# mxtop v0.2.0 — Disk I/O, Top Processes, Export & Root Hardening
 
 > **mxtop** is an actively maintained fork of the original [`asitop`](https://github.com/tlkh/asitop).
 > It aims to fix long-standing bugs and ensure compatibility with the latest macOS updates and Apple Silicon chips.
@@ -7,59 +7,103 @@
 
 ## Highlights
 
-- **Modular architecture** — codebase split into focused, testable modules
-- **New dashboard panels** — WiFi, Battery, Charger, Network I/O
-- **Loguru logging** — structured logging with runtime `--log-level` control
-- **Background metrics** — slow system calls no longer block the UI
-- **Parallel startup** — SoC probes run concurrently for faster boot
-- **WiFi compatibility** — 3-tier fallback works on all macOS versions
+- **Disk I/O panel** — read/write throughput alongside network
+- **Top processes panel** — heaviest processes by CPU, with resident memory (`--top N`)
+- **Sample export** — append every reading to CSV or JSON Lines (`--export PATH`)
+- **Ghostty support** — no more unstyled dashboard on terminals missing a terminfo entry
+- **Runs without `sudo`** — degrades instead of crashing when the powermetrics file is not writable
+- **Security hardening** — mxtop runs as root; five places that trusted attacker-controlled input are closed
 
 ## What's New
 
-### Modular Architecture
+### Disk I/O panel
 
-The monolithic `mxtop.py` has been split into dedicated modules:
+Read and write throughput now sit next to network throughput in a shared **I/O**
+panel. Rates are derived from a timestamp carried on each sample rather than the
+display interval, so they stay correct whatever the collector's refresh rate is.
 
-| Module | Responsibility |
-|--------|---------------|
-| `mxtop.py` | CLI entry point & main loop orchestrator |
-| `ui.py` | Dashboard layout and widget construction |
-| `updater.py` | Widget update logic (applies metrics to gauges/charts) |
-| `keyboard.py` | Background keyboard listener thread |
-| `system_info.py` | WiFi, power, battery, charger, network collectors |
-| `utils.py` | SoC info, powermetrics process, RAM metrics |
-| `parsers.py` | Powermetrics plist parsing |
+```
+Network: ↑ 12.4 KB/s  ↓ 1.2 MB/s
+Disk: R 340.0 KB/s  W 12.1 MB/s
+```
 
-### New Dashboard Panels
+### Top processes (`--top N`)
 
-- **WiFi** — SSID, signal strength (dBm + percentage), transmit rate, channel
-- **Battery** — charge level, state (Charging / Discharging / Charged), time remaining
-- **Charger** — adapter name, wattage, cable connection status
-- **Network I/O** — real-time upload/download throughput (bytes/s)
+A new panel lists the heaviest processes by CPU, then by resident memory.
+`--top 0` hides it. CPU percentages are measured between successive collector
+passes, so the first sample after startup reads 0% for everything and the
+ranking becomes meaningful from the second pass on.
 
-### Performance Improvements
+```
+ 42.1%   1.2 GB   Safari
+ 18.7% 340.0 MB   WindowServer
+```
 
-- **Parallel startup**: `get_soc_info()` runs CPU, core-count, and GPU probes concurrently via `ThreadPoolExecutor`, cutting boot time by ~60%.
-- **Background metrics collector**: `BackgroundMetricsCollector` runs expensive system calls (`system_profiler`, `pmset`) in a daemon thread on a 5-second cycle. The main UI loop reads thread-safe cached snapshots — no more freezes.
+### Sample export (`--export PATH`)
 
-### Loguru Logging
+Append every reading to a file, format chosen by the extension:
 
-- Replaced `stdlib logging` with [`loguru`](https://github.com/Delgan/loguru) across all modules.
-- New `--log-level` CLI flag (`DEBUG`, `INFO`, `WARNING`, `ERROR`).
-- Structured log messages with lazy formatting (`logger.info("msg {}", val)`).
+| extension | format |
+|---|---|
+| `.csv` | CSV with a header row |
+| `.json`, `.jsonl`, `.ndjson` | JSON Lines, one object per line |
 
-### WiFi Compatibility
+Rows are flushed as they are written, so the file is readable while mxtop is
+still running and stays complete if the run is interrupted with `q` or Ctrl-C.
+Under `sudo mxtop` the file is handed back to the invoking user rather than left
+root-owned.
 
-WiFi detection now uses a 3-tier fallback strategy:
+### Terminal compatibility
 
-1. `system_profiler SPAirPortDataType` — works on all macOS versions
-2. Legacy `airport -I` utility — older macOS where it still exists
-3. `networksetup -getairportnetwork en0` — last-resort SSID detection
+`TERM` values with no entry in the system terminfo database — Ghostty's
+`xterm-ghostty` is the common one — now fall back to `xterm-256color` at package
+import, before `blessed` is loaded. Previously the dashboard rendered unstyled
+behind a `setupterm` warning, and the only workarounds were `TERM=xterm-256color
+sudo mxtop` or editing the Ghostty config. Fixes #5.
 
-### Layout
+### Running without `sudo`
 
-- Power charts (CPU + GPU) get their own full-width bottom row for better readability.
-- System info panel groups WiFi, Battery, and Charger vertically.
+`powermetrics` always runs as root, so without `sudo mxtop` its output file
+belongs to root and cannot be opened for writing. That is no longer fatal: the
+file is read read-only and left untouched instead of raising.
+
+A failed `powermetrics` start is also reported now. Its stderr goes to
+`DEVNULL`, so the startup loop used to spin forever on
+`[3/3] Waiting for first reading...`; it polls the child and exits with its
+status.
+
+### Security hardening
+
+mxtop runs as root under `sudo mxtop`. Five places took input from somewhere a
+local unprivileged user controls:
+
+| what | before | after |
+|---|---|---|
+| powermetrics temp file | `/tmp/mxtop_powermetrics<epoch>` — predictable name in a world-writable directory, reopened `O_RDWR`, truncated and rewritten as root | private `mkdtemp` directory (0700), opened `O_NOFOLLOW` with an `S_ISREG` check |
+| helper binaries | resolved through `$PATH`; macOS sudo sets no `secure_path`, so that is the invoking user's `PATH` | absolute paths at every call site |
+| `clear_console()` | `os.system("clear")` — a shell, plus a `$PATH` lookup | one `print()` of the ANSI sequence |
+| process names, WiFi SSIDs, adapter names | rendered raw into a root-driven terminal | control characters stripped before rendering |
+| `--export` under sudo | root-owned file the user could not edit or delete | `fchown` back to the invoking user |
+
+The first of these allowed a local user to have root truncate and overwrite an
+arbitrary file. If you run mxtop with `sudo`, upgrade.
+
+## CLI Options
+
+```bash
+sudo mxtop --interval 2 --color 3 --avg 60 --top 8 --export run.csv
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--interval` | 1 | Sampling & display interval (seconds) |
+| `--color` | 2 | TUI color scheme (0–8) |
+| `--avg` | 30 | Rolling average window (seconds) |
+| `--show_cores` | False | Show individual core utilization |
+| `--max_count` | 0 | Restart powermetrics after N samples (0 = unlimited) |
+| `--top` | 5 | Top CPU processes to display (0 hides the panel) |
+| `--export` | — | Append every sample to PATH (`.csv`, or `.json`/`.jsonl`/`.ndjson`) |
+| `--log-level` | WARNING | Loguru log level |
 
 ## Monitored Metrics
 
@@ -75,36 +119,23 @@ WiFi detection now uses a 3-tier fallback strategy:
 | **Battery** | Charge %, state, time remaining |
 | **Charger** | Adapter name, wattage, cable status |
 | **Network** | Upload & download throughput (bytes/s) |
-
-## CLI Options
-
-```bash
-sudo mxtop --interval 2 --color 3 --avg 60 --log-level DEBUG
-```
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--interval` | 1 | Sampling & display interval (seconds) |
-| `--color` | 2 | TUI color scheme (0–8) |
-| `--avg` | 30 | Rolling average window (seconds) |
-| `--show_cores` | False | Show individual core utilization |
-| `--max_count` | 0 | Restart powermetrics after N samples (0 = unlimited) |
-| `--log-level` | WARNING | Loguru log level |
+| **Disk** | Read & write throughput (bytes/s) |
+| **Processes** | Top N by CPU, with resident memory |
 
 ## Dependencies
 
 | Package | Version | Purpose |
 |---------|---------|---------|
 | `dashing` | ≥ 0.1.0 | Terminal UI widgets |
-| `loguru` | ≥ 0.7.0 | Structured logging (new) |
-| `psutil` | ≥ 7.2.2 | System metrics (RAM, network) |
+| `loguru` | ≥ 0.7.0 | Structured logging |
+| `psutil` | ≥ 7.2.2 | System metrics (RAM, network, disk, processes) |
 
 ## Test Suite
 
-62 tests covering all modules:
+93 tests:
 
 ```bash
-uv run pytest -v
+uv run --group test pytest tests/ -q
 ```
 
 ## Requirements
@@ -119,4 +150,4 @@ MIT
 
 ---
 
-**Full Changelog**: https://github.com/Vlor999/mxtop/compare/v0.1.0...v0.1.1
+**Full Changelog**: https://github.com/Vlor999/mxtop/compare/v0.1.1...v0.2.0

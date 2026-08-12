@@ -4,7 +4,7 @@ long_description = 'Performance monitoring CLI tool for Apple Silicon'
 
 setup(
     name='mxtop',
-    version='0.1.1',
+    version='0.2.0',
     author='Timothy Liu',
     author_email='tlkh.xms@gmail.com',
     url='https://github.com/Vlor999/mxtop.git',
