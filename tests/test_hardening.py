@@ -4,6 +4,7 @@ import os
 import plistlib
 import stat
 
+from mxtop.export import Exporter
 from mxtop.utils import _TMP_DIR, _TMP_PREFIX, parse_powermetrics
 from mxtop.updater import _printable, update_top_widget, update_wifi_widget
 
@@ -90,3 +91,26 @@ def test_ssid_escapes_never_reach_the_widget():
         "tx_rate_Mbps": None, "noise_dBm": None, "channel": None,
     })
     assert "\x1b" not in w["wifi_gauge"].title
+
+
+# --- export file ownership -------------------------------------------------
+
+def test_export_file_is_handed_back_to_the_sudo_user(tmp_path, monkeypatch):
+    """Under sudo the export must not stay root-owned."""
+    calls = []
+    monkeypatch.setenv("SUDO_UID", str(os.getuid()))
+    monkeypatch.setenv("SUDO_GID", str(os.getgid()))
+    monkeypatch.setattr(os, "fchown", lambda fd, uid, gid: calls.append((uid, gid)))
+
+    Exporter(tmp_path / "out.csv").close()
+    assert calls == [(os.getuid(), os.getgid())]
+
+
+def test_export_file_untouched_without_sudo(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.delenv("SUDO_UID", raising=False)
+    monkeypatch.delenv("SUDO_GID", raising=False)
+    monkeypatch.setattr(os, "fchown", lambda fd, uid, gid: calls.append((uid, gid)))
+
+    Exporter(tmp_path / "out.csv").close()
+    assert calls == []
