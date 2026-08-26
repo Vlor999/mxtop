@@ -194,13 +194,15 @@ def run_powermetrics_process(
     # Absolute paths: this runs as root, and macOS sudo does not set
     # secure_path, so $PATH is still the invoking user's.
     cmd = [
-        "/usr/bin/sudo", "/usr/bin/nice", f"-n{nice}",
+        "/usr/bin/nice", f"-n{nice}",
         "/usr/bin/powermetrics",
         "--samplers", "cpu_power,gpu_power,thermal",
         "-o", f"{_TMP_PREFIX}{timecode}",
         "-f", "plist",
         "-i", str(interval),
     ]
+    if os.geteuid() != 0:
+        cmd = ["/usr/bin/sudo", *cmd]
     return subprocess.Popen(
         cmd,
         stdin=subprocess.PIPE,
